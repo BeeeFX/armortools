@@ -1,0 +1,19 @@
+# The upstream ArmorPaint commit this layer is tested against, and the toolchain it builds with.
+# Bump `commit` only together with a green smoke test (layer/tests/smoke/smoke.py) and, when the
+# script API moved, a reviewed `layer/tests/smoke/api_snapshot.h` (smoke.py --update-snapshot).
+
+[upstream]
+repository = "https://github.com/armory3d/armorpaint"
+branch = "main"
+commit = "8c8e336adc6ad69eb5b551a6602d014df30312b3"
+date = "2026-09-28"
+# What ArmorPaint's About box says at that commit.
+version = "1.1 alpha"
+
+[toolchain]
+# Upstream builds with clang 19+ (Visual Studio's ClangCL toolset on Windows). Without it, the build tool
+# switches a copy of the project to MSVC (v143) and makes three mechanical syntax changes in that copy only
+# (layer/README.md > Building on Windows without clang). Members only ever get clang builds.
+windows = "Visual Studio 2022, ClangCL (preferred) or v143 (scratch builds for tests)"
+amake = "base/tools/bin/windows_x64/amake.exe (upstream's own, at the pinned commit)"
+python = "3.10 or newer, standard library only (build tool and smoke test)"
