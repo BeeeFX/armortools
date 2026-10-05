@@ -1,0 +1,13 @@
+{
+	"textures": [
+		{ "name": "basecolor_srgb", "channels": ["base_r", "base_g", "base_b", "1.0"], "color_space": "linear" },
+		{ "name": "normal_raw", "channels": ["nor_r", "nor_g", "nor_b", "1.0"], "color_space": "linear" },
+		{ "name": "occlusion_raw", "channels": ["occ", "occ", "occ", "1.0"], "color_space": "linear" },
+		{ "name": "roughness_raw", "channels": ["rough", "rough", "rough", "1.0"], "color_space": "linear" },
+		{ "name": "metallic_raw", "channels": ["metal", "metal", "metal", "1.0"], "color_space": "linear" },
+		{ "name": "height_raw", "channels": ["height", "height", "height", "1.0"], "color_space": "linear" },
+		{ "name": "opacity_raw", "channels": ["opac", "opac", "opac", "1.0"], "color_space": "linear" },
+		{ "name": "emission_mask_raw", "channels": ["emis", "emis", "emis", "1.0"], "color_space": "linear" },
+		{ "name": "subsurface_raw", "channels": ["subs", "subs", "subs", "1.0"], "color_space": "linear" }
+	]
+}
