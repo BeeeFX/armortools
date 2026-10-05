@@ -44,9 +44,11 @@ Before building, it checks that the few internals the bindings declare by hand s
 (a C declaration that no longer matches would still link), and after, that the repository is unchanged.
 
 **With clang** (Visual Studio's "C++ Clang tools for Windows"), it builds exactly as upstream does: this is how
-members' builds are made.
+members' builds are made. Checked on 5 October 2026 with Visual Studio 2022's clang-cl 16.0.5 (ClangCL toolset) on
+upstream `4c06b93`: it builds without any change (about 25 s for MSBuild), and the smoke test and Singerie's
+pipeline plugin checks pass on it. `--toolset clang` insists on it; `auto` (the default) takes it when installed.
 
-**Without clang** (the development PC today), it switches the copy to MSVC (toolset v143) and makes three
+**Without clang**, it switches the copy to MSVC (toolset v143) and makes three
 mechanical syntax changes MSVC needs, in the copy only: C23 empty initializers `(void *[]){}` become
 `(void *[]){0}` (each is passed with a length of 0), compound literals initializing file-scope variables lose their
 cast, and the two variable-length arrays of the colour ramp and vector curves nodes get a fixed size of 1024. They
@@ -54,6 +56,29 @@ change nothing ArmorPaint does, are never committed, and such a build is for tes
 so). The layer's own code is portable C and needs none of them; the build refuses it if it ever does.
 
 Logs go to `<into>/logs/` (`amake.log`, `msbuild.log`). A build takes about 15 seconds.
+
+## Packaging a members' build
+
+```bash
+python layer/tools/build_windows.py --toolset clang
+python layer/tools/package_windows.py --out <folder>
+```
+
+`package_windows.py` packs a clang build of the repository's current commit as the archive Singerie's software
+manager installs, and refuses anything else (an MSVC scratch build, a build of another commit, uncommitted changes).
+It writes `singepaint-<version>-win64.zip` (one folder holding the app; a `config.json` or session folder a run left
+in the build stays out, so a member's first start gets the layer's defaults), `<zip>.sha256`, and `<zip>.json` with
+what an admin enters in Singerie's Admin › Desktop app › Builds of our apps (app `armorpaint`, version, archive name,
+size, SHA-256, plus the commits and toolset). It then unpacks the archive with Windows' own `tar.exe`, as the
+software manager does, and starts the app once (`--api` must list the `sng_*` functions).
+
+The version is shaped the way the software manager reads and orders builds (three numbers, then `+` and a build part
+of letters, digits, dots and dashes; ordered by all their numbers): `<ArmorPaint's version>+<upstream
+date>.sng<n>.<upstream>.<layer>`, for example `1.1.0+2026.10.04.sng16.4c06b93.64a2092`. ArmorPaint's version comes
+from its `manifest_version` (`1.1alpha` is `1.1.0`: a project pins `1.1.x` for it); the upstream commit's date orders
+builds of different upstream commits; `n`, the count of the layer's own commits, orders builds of one upstream commit;
+the two commits at the end are the About box's `<upstream>+sng.<layer>`. The script uploads nothing: publishing is an
+admin's step in Singerie.
 
 ## Testing
 
