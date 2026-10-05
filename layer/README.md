@@ -209,6 +209,11 @@ in the bindings. minic's limits still apply to plugins: 32 functions, 64 globals
 The automated weekly watch (a scheduled job doing steps 1 and 2 and opening a pull request or an issue) is planned
 but not written: GitHub Actions are switched off on this repository for now.
 
+A dry run on 5 October 2026, on upstream's `main` at `4c06b93` (58 commits after the pin, several of them script
+API changes): the layer built unchanged, every check passed except the API comparison, which listed 70 new upstream
+functions (procedural geometry, environment maps, a few maths functions) and nothing removed or changed; Singerie's
+pipeline plugin checks passed too.
+
 ## Licence
 
 zlib (`LICENSE.md`), like ArmorPaint, so any piece can be offered upstream unchanged. Builds are marked as altered
