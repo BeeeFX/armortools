@@ -5,6 +5,7 @@ then the built ArmorPaint run headless.
     python layer/tests/smoke/smoke.py --armorpaint <folder>    # another build (the folder holding ArmorPaint.exe)
     python layer/tests/smoke/smoke.py --static                 # only the checks that need no build
     python layer/tests/smoke/smoke.py --update-snapshot        # after reviewing an upstream API change
+    python layer/tests/smoke/smoke.py --allow-additions        # new upstream API entries pass (layer/tools/watch.py)
 
 Without a build (checked against upstream's sources in this tree):
 - the theme follows ArmorPaint's theme fields in their order (its theme reader is positional, not by name);
@@ -259,7 +260,7 @@ def png_size(path: Path) -> tuple[int, int] | None:
     return struct.unpack(">II", data[16:24])
 
 
-def check_api(app: Path, update: bool) -> None:
+def check_api(app: Path, update: bool, allow_additions: bool = False, snapshot_out: Path | None = None) -> None:
     print("== --api: the layer's functions, and upstream's script API against the snapshot", flush=True)
     result = run(app, "--api")
     text = api_part(result.stdout)
@@ -270,6 +271,8 @@ def check_api(app: Path, update: bool) -> None:
     expected = sorted(bindings_registered())
     check(f"every sng_* function is registered ({len(expected)})", found == expected, sorted(set(expected) ^ set(found)))
     upstream = upstream_only(text)
+    if snapshot_out:  # the watch keeps this build's API, to become the snapshot once everything passed
+        snapshot_out.write_text(upstream, encoding="utf-8", newline="\n")
     if update or not SNAPSHOT.exists():
         SNAPSHOT.write_text(upstream, encoding="utf-8", newline="\n")
         print(f"     snapshot written: {SNAPSHOT.relative_to(REPO)} ({len(api_entries(upstream))} entries)")
@@ -280,7 +283,12 @@ def check_api(app: Path, update: bool) -> None:
     removed = sorted(set(old) - set(new))
     changed = sorted(name for name in set(old) & set(new) if old[name] != new[name])
     same = not (added or removed or changed)
-    check(f"upstream's script API is the snapshot's ({len(new)} entries)", same, "see below")
+    if allow_additions and same is False and not (removed or changed):
+        # New upstream functions can't break the layer or a plugin; a removed or changed one can.
+        check(f"upstream's script API keeps every snapshot entry ({len(added)} new, none removed or changed)", True)
+        same = True
+    else:
+        check(f"upstream's script API is the snapshot's ({len(new)} entries)", same, "see below")
     for title, names in (("removed", removed), ("changed", changed), ("added", added)):
         for name in names[:40]:
             print(f"     {title}: {name}" + (f"\n       was: {old[name]}\n       now: {new[name]}" if title == "changed" else ""))
@@ -446,7 +454,7 @@ def check_bindings(app: Path, tmp: Path) -> None:
     check("the export wrote nothing else", not extra, extra)
 
 
-def app_checks(source: Path, update: bool) -> None:
+def app_checks(source: Path, update: bool, allow_additions: bool = False, snapshot_out: Path | None = None) -> None:
     if not (source / "ArmorPaint.exe").is_file():
         check(f"a build at {source}", False, "build first: python layer/tools/build_windows.py")
         return
@@ -461,7 +469,7 @@ def app_checks(source: Path, update: bool) -> None:
                 check(f"data/{sub}/{path.name} is the layer's", laid.is_file() and laid.read_bytes() == path.read_bytes())
         check("ALTERED_VERSION.txt marks the build as altered", (app / "ALTERED_VERSION.txt").is_file())
         check_defaults(app, tmp)  # first: it needs a copy ArmorPaint never started in
-        check_api(app, update)
+        check_api(app, update, allow_additions, snapshot_out)
         check_bindings(app, tmp)
 
 
@@ -470,10 +478,13 @@ def main() -> int:
     parser.add_argument("--armorpaint", default=os.fspath(DEFAULT_APP), help="the folder holding ArmorPaint.exe")
     parser.add_argument("--static", action="store_true", help="only the checks that need no build")
     parser.add_argument("--update-snapshot", action="store_true", help="rewrite api_snapshot.h from this build")
+    parser.add_argument("--allow-additions", action="store_true", help="new upstream API entries pass (the watch)")
+    parser.add_argument("--snapshot-out", help="also write this build's upstream API to that file (the watch)")
     args = parser.parse_args()
     static_checks()
     if not args.static:
-        app_checks(Path(args.armorpaint).resolve(), args.update_snapshot)
+        out = Path(args.snapshot_out).resolve() if args.snapshot_out else None
+        app_checks(Path(args.armorpaint).resolve(), args.update_snapshot, args.allow_additions, out)
     print(f"\n{'All checks passed.' if not failures else f'{len(failures)} check(s) failed.'}")
     return 0 if not failures else 1
 
