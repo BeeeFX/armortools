@@ -76,7 +76,7 @@ With the build, each part in a fresh copy of its folder:
 - **the defaults**: a first start writes the Painter keymap and theme in ArmorPaint's `data/config.json`; a config
   with the member's own choice keeps it;
 - **`--api`**: all `sng_*` functions registered, and ArmorPaint's own script API (its functions, structs, enums,
-  globals and material nodes, 795 entries at the pinned commit) compared with `tests/smoke/api_snapshot.h`: an
+  globals and material nodes, 865 entries at the pinned commit) compared with `tests/smoke/api_snapshot.h`: an
   upstream rename, removal or new parameter is listed by name;
 - **the bindings** (`tests/smoke/scripts/bindings.c`, run with `--background --script`): every `sng_*` function on
   a fresh project (a merge, a paint layer renamed, faded, blended, hidden then shown through undo and redo, a fill
@@ -212,21 +212,39 @@ in the bindings. minic's limits still apply to plugins: 32 functions, 64 globals
 
 ## Keeping up with upstream
 
-1. Fetch upstream (`git fetch upstream`), bring `main` up to it, and merge `main` into `sng/main` (no rebase needed:
-   the layer touches no upstream file, so it never conflicts).
-2. Build, then run the smoke test. A compile error or a failed internals check points at `native/sng_bindings.c`; a
-   failed static check at a data file; an API difference lists what changed by name.
-3. Fix what broke, review the API difference, then `smoke.py --update-snapshot` and set `commit` and `date` in
-   `upstream.toml` to the new upstream commit.
-4. Singerie's pipeline plugin test (`run_tests.py`) against the new build, then a tagged build of the layer.
+The layer follows upstream ArmorPaint's `main` **weekly, once the smoke test passes** (Baptiste, 5 October 2026).
+GitHub Actions are off on this repository, so the watch runs from a PC that can build (Visual Studio 2022):
 
-The automated weekly watch (a scheduled job doing steps 1 and 2 and opening a pull request or an issue) is planned
-but not written: GitHub Actions are switched off on this repository for now.
+```bash
+python layer/tools/watch.py --singerie <Singerie's repository>                  # check: nothing changes
+python layer/tools/watch.py --singerie <Singerie's repository> --apply --push   # follow upstream, push
+```
 
-A dry run on 5 October 2026, on upstream's `main` at `4c06b93` (58 commits after the pin, several of them script
-API changes): the layer built unchanged, every check passed except the API comparison, which listed 70 new upstream
-functions (procedural geometry, environment maps, a few maths functions) and nothing removed or changed; Singerie's
-pipeline plugin checks passed too.
+It fetches upstream; if `main` moved past the pin, it builds the layer on upstream's newest commit in a temporary
+worktree, runs the smoke test (new upstream API entries pass; removed or changed ones fail and are named) and, with
+`--singerie`, Singerie's pipeline plugin test (`plugins/armorpaint/tests/run_tests.py`) on that build, then writes
+`watch-report.md` beside the build (`~/.singerie/tools/armorpaint-layer-watch`): the upstream commits since the
+pin, each step's result, the API's new entries. With `--apply`, and only when every step passed, it fast-forwards
+`main` to upstream, merges `main` into `sng/main` (no conflict is possible: the layer touches no upstream file),
+sets the pin in `upstream.toml`, writes the new `api_snapshot.h`, and commits; `--push` pushes both branches
+(never forced). It needs `sng/main` checked out with nothing uncommitted. `--trailer "Key: value"` adds a line to
+its commits.
+
+When a step fails, nothing changes: read the report and the logs beside it. A compile error or a failed internals
+check points at `native/sng_bindings.c`; a failed static check at a data file in `ext/`; a removed or changed API
+entry at whatever uses it (the bindings, Singerie's pipeline plugin). Fix it on `sng/main`, run the watch again.
+
+To run it every week, Windows' Task Scheduler can start it, for example on Mondays at 9:00 (one line, in a terminal
+on the PC that builds; it only reports, without `--apply`):
+
+```bat
+schtasks /Create /SC WEEKLY /D MON /ST 09:00 /TN "Singepaint upstream watch" /TR "python %USERPROFILE%\.singerie\tools\armortools-layer\layer\tools\watch.py --singerie <Singerie's repository>"
+```
+
+The first follow (5 October 2026): `main` fast-forwarded from `8c8e336` to `4c06b93` (58 upstream commits, several
+of them script API changes); the layer built unchanged, the smoke test passed with 70 new upstream functions
+(procedural geometry, environment maps, a few maths functions) and nothing removed or changed, and Singerie's
+pipeline plugin test passed (56 checks).
 
 ## Licence
 

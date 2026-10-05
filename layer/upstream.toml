@@ -1,13 +1,13 @@
 # The upstream ArmorPaint commit this layer is tested against, and the toolchain it builds with.
-# Bump `commit` only together with a green smoke test (layer/tests/smoke/smoke.py) and, when the
-# script API moved, a reviewed `layer/tests/smoke/api_snapshot.h` (smoke.py --update-snapshot).
+# Moved by layer/tools/watch.py --apply, only after the build, the smoke test (and Singerie's pipeline plugin test)
+# passed on the new commit; by hand: a green smoke test and a reviewed api_snapshot.h (smoke.py --update-snapshot).
 
 [upstream]
 repository = "https://github.com/armory3d/armorpaint"
 branch = "main"
 commit = "4c06b93b8e0c8a9723c7d6711940177a29b38891"
 date = "2026-10-04"
-# What ArmorPaint's About box says at that commit.
+# ArmorPaint's manifest_version at that commit (its About box shows it).
 version = "1.1alpha"
 
 [toolchain]
