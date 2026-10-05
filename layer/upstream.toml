@@ -5,10 +5,10 @@
 [upstream]
 repository = "https://github.com/armory3d/armorpaint"
 branch = "main"
-commit = "8c8e336adc6ad69eb5b551a6602d014df30312b3"
-date = "2026-09-28"
+commit = "4c06b93b8e0c8a9723c7d6711940177a29b38891"
+date = "2026-10-04"
 # What ArmorPaint's About box says at that commit.
-version = "1.1 alpha"
+version = "1.1alpha"
 
 [toolchain]
 # Upstream builds with clang 19+ (Visual Studio's ClangCL toolset on Windows). Without it, the build tool
