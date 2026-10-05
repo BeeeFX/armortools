@@ -65,7 +65,9 @@ VARIABLE_LENGTH_ARRAYS = {
 # layer/ext/<folder> -> data/<folder> in the laid-out app.
 EXT_FOLDERS = ("keymap_presets", "themes", "export_presets", "plugins")
 
-ALTERED_NOTE = """This is an altered version of ArmorPaint (https://github.com/armory3d/armorpaint), based on ArmorPaint.
+ALTERED_NOTE = """This is Singepaint, an altered version of ArmorPaint (https://github.com/armory3d/armorpaint), based on
+ArmorPaint. Its title bar says "Singepaint (based on ArmorPaint)", and its About box shows the commit as
+{upstream}+sng.{layer}.
 
 It is ArmorPaint at upstream commit {upstream} with the Singerie layer (commit {layer}) added: Painter-like default
 shortcuts and theme, studio export presets and the sng_* script functions (FORK.md and layer/README.md in the

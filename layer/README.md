@@ -71,6 +71,8 @@ an upstream one.
 With the build, each part in a fresh copy of its folder:
 
 - the layer's data files are in the app;
+- **the name**: the title bar says `untitled - Singepaint (based on ArmorPaint)` from the start, and
+  `untitled* - Singepaint (based on ArmorPaint)` once a change marks the project unsaved;
 - **the defaults**: a first start writes the Painter keymap and theme in ArmorPaint's `data/config.json`; a config
   with the member's own choice keeps it;
 - **`--api`**: all `sng_*` functions registered, and ArmorPaint's own script API (its functions, structs, enums,
@@ -122,6 +124,18 @@ Tab typed in a text field hides the interface; F5 always starts ArmorPaint's pla
 Ctrl+G for layers have no ArmorPaint action (GAPS.md, item 6). These bindings were reasoned from ArmorPaint's input
 code and checked to load; they haven't been tried by hand in the window yet.
 
+## The name: Singepaint
+
+The collective's build shows **"Singepaint (based on ArmorPaint)"** in its title bar (Baptiste, 5 October 2026):
+`chr_monkey_texturing_main_v001* - Singepaint (based on ArmorPaint)`. ArmorPaint writes its title from its
+`manifest_title` ("ArmorPaint") when it starts, saves, opens and on the first change; the native module renames
+the title's ` - ArmorPaint` ending on the frame after (and sets the window's first title itself, since ArmorPaint
+doesn't record that one). `manifest_title` itself stays, because upstream also uses it for the About box
+("ArmorPaint.org - v..."), its bug report link and the folder of its settings: those keep upstream's name, and the
+About box's commit says `+sng.`. No upstream file is changed. `sng_info("name")` gives the name to scripts. On
+Windows nothing reads the title back except plugins: Singerie's looks for `* - ` (unsaved changes), which works with
+either name. The program is still `ArmorPaint.exe`, which Singerie's software manager and launcher expect.
+
 ## The theme
 
 `ext/themes/painter.json`: neutral dark greys with a blue accent, flat buttons, no shadows; ArmorPaint's sizes. Its
@@ -167,7 +181,7 @@ use or delete it at once.
 | Function | What |
 |---|---|
 | `char *sng_version()`, `int sng_api_level()` | `sng 0.1.0 (api 1, layer …, ArmorPaint …, built …)`; the level rises only when a function changes meaning |
-| `char *sng_info(char *what)` | `upstream`, `layer`, `built`, `keymap`, `theme`, `defaults` (`applied` or `kept` this start) |
+| `char *sng_info(char *what)` | `name` ("Singepaint (based on ArmorPaint)"), `upstream`, `layer`, `built`, `keymap`, `theme`, `defaults` (`applied` or `kept` this start) |
 | `char *sng_getenv(char *name)` | An environment variable, `""` when unset (minic has no getenv) |
 | `int sng_redraw()` | Redraw the whole interface |
 | `int sng_layer_count()`, `int sng_layer_at(int index)`, `int sng_layer_index(int id)` | The stack |

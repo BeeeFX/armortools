@@ -9,7 +9,8 @@ undo and redo, set the bake settings and export. Nothing in upstream's own files
 compiled in through a hook upstream provides for exactly that. Run `git diff main...sng/main` to see everything this
 copy adds.
 
-Builds made from `sng/main` are altered versions of ArmorPaint, "based on ArmorPaint", and say so
-(`ALTERED_VERSION.txt` beside the program, `+sng.` in the version shown in the About box). ArmorPaint's licence
+Builds made from `sng/main` are altered versions of ArmorPaint, "based on ArmorPaint", and say so: their title bar
+shows "Singepaint (based on ArmorPaint)", `ALTERED_VERSION.txt` sits beside the program, and the version in the About
+box carries `+sng.`. ArmorPaint's licence
 (zlib, `license.md`) applies to ArmorPaint; the layer's own files are zlib too (`layer/LICENSE.md`). ArmorPaint's
 author funds his work by selling ready-made builds at [armorpaint.org](https://armorpaint.org/download).

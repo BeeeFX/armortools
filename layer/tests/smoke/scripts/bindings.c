@@ -50,6 +50,8 @@ void step_export() {
 }
 
 void step_masks() {
+	// The title on the frame after the changes above: ArmorPaint marked it unsaved, the layer renamed it.
+	put("title_after_change", sys_title());
 	put_i("mask_invert", sng_mask_invert(mask_black));
 	put("history_after_invert", sng_history_step(0));
 	put_i("mask_invert_refused", sng_mask_invert(paint_id));
@@ -63,6 +65,7 @@ void step_masks() {
 void main() {
 	report = string_copy("");
 	put("version", sng_version());
+	put("title_start", sys_title());
 
 	// The fresh project: one paint layer. Merge a new layer down into it, and try to delete the last layer.
 	put_i("count_start", sng_layer_count());

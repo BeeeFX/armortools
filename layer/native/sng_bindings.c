@@ -1,5 +1,6 @@
-// The Singerie layer's native module (route X): stable sng_* script functions for ArmorPaint's minic plugins, and
-// the layer's defaults (Painter-like shortcuts and theme on a fresh config).
+// The Singerie layer's native module (route X): stable sng_* script functions for ArmorPaint's minic plugins, the
+// layer's defaults (Painter-like shortcuts and theme on a fresh config), and the name the build shows in its title
+// bar ("Singepaint (based on ArmorPaint)").
 //
 // Upstream compiles paint/plugins/external/ in when it exists and calls external_init() from plugins_init(), after
 // the config is loaded and before the UI starts; layer/tools/build_windows.py lays this folder out there. This is the
@@ -30,13 +31,15 @@
 
 #define SNG_API_LEVEL      1 // raised when an existing sng_* function changes meaning; new functions don't raise it
 #define SNG_LAYER_VERSION  "0.1.0"
-#define SNG_DEFAULT_KEYMAP "painter.json" // data/keymap_presets/
-#define SNG_DEFAULT_THEME  "painter.json" // data/themes/
+#define SNG_DEFAULT_KEYMAP "painter.json"                     // data/keymap_presets/
+#define SNG_DEFAULT_THEME  "painter.json"                     // data/themes/
+#define SNG_SHOWN_NAME     "Singepaint (based on ArmorPaint)" // in the window's title bar (Baptiste, 5 October 2026)
 
 // BEGIN internals not in upstream's headers
 // ArmorPaint defines these without declaring them in a header. build_windows.py checks that each line below still
 // matches upstream's definition before building, since a C prototype that no longer matches would still link.
 extern bool                    config_loaded;
+extern char                   *manifest_title;
 extern f32                     layers_default_rough;
 extern i32                     base_bits;
 extern char                   *ui_files_filename;
@@ -164,11 +167,14 @@ static minic_val_t sng_api_level(minic_val_t *a, int n) {
 	return minic_val_int(SNG_API_LEVEL);
 }
 
-// sng_info(what): "upstream", "layer", "built", "keymap", "theme", "defaults" ("applied" when this start gave a fresh
-// config the layer's keymap and theme, else "kept").
+// sng_info(what): "name" (the name the build shows), "upstream", "layer", "built", "keymap", "theme", "defaults"
+// ("applied" when this start gave a fresh config the layer's keymap and theme, else "kept").
 static minic_val_t sng_info(minic_val_t *a, int n) {
 	const char *what   = minic_arg_p(a, n, 0);
 	config_t   *config = script_get_config();
+	if (sng_is(what, "name")) {
+		return sng_text(SNG_SHOWN_NAME);
+	}
 	if (sng_is(what, "upstream")) {
 		return sng_text(SNG_UPSTREAM_COMMIT);
 	}
@@ -889,9 +895,46 @@ static void sng_apply_defaults(void) {
 	}
 }
 
+// ████ The shown name ████
+
+// ArmorPaint writes its title as "<project> - ArmorPaint", "<project>* - ArmorPaint" once there are unsaved changes
+// (history_push), from manifest_title. The build shows "<project> - Singepaint (based on ArmorPaint)" instead: the
+// first title is set when the module starts (the window already exists, titled "untitled - ArmorPaint" by
+// config_get_options, which doesn't record it where sys_title() reads), and the title is renamed on every frame after
+// ArmorPaint set it again (saving, opening, the first change). manifest_title itself stays: upstream also uses it for
+// the About box ("ArmorPaint.org - v..."), its bug report link and the app's data folder, which keep upstream's name.
+// On Windows, nothing reads the title back but plugins (Singerie's looks for "* - ").
+static void sng_title_rename(void) {
+	// Runs every frame: compares in place, allocates nothing.
+	char  *title  = sys_title();
+	size_t length = strlen(title);
+	size_t name   = strlen(manifest_title);
+	if (length < name + 3 || strcmp(title + length - name, manifest_title) != 0 || strncmp(title + length - name - 3, " - ", 3) != 0) {
+		return; // not ArmorPaint's own title (already renamed, or set by a plugin)
+	}
+	char   renamed[1024]; // sys_title_set copies into ArmorPaint's own 1024-byte title
+	size_t kept = length - name - 3;
+	size_t room = sizeof(renamed) - sizeof(" - " SNG_SHOWN_NAME);
+	if (kept > room) {
+		kept = room;
+	}
+	memcpy(renamed, title, kept);
+	strcpy(renamed + kept, " - " SNG_SHOWN_NAME);
+	sys_title_set(renamed);
+}
+
+static void sng_title_update(void *_) {
+	sng_title_rename();
+}
+
 void external_init(void) {
 	for (int i = 0; i < (int)(sizeof(sng_bindings) / sizeof(sng_bindings[0])); ++i) {
 		minic_register(sng_bindings[i].name, sng_bindings[i].sig, sng_bindings[i].fn);
 	}
 	sng_apply_defaults();
+	if (sys_title()[0] == '\0') {
+		sys_title_set("untitled - " SNG_SHOWN_NAME); // the window's first title, as config_get_options words it
+	}
+	sng_title_rename();
+	sys_notify_on_update(&sng_title_update, NULL);
 }

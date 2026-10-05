@@ -16,7 +16,8 @@ With the build (each run in a copy of its folder, so the build stays untouched):
 - the layer's data files are in the app's data folder;
 - `--api`: every sng_* function registered, and ArmorPaint's own script API (functions, structs, enums, globals and
   the material nodes) compared with `api_snapshot.h`, so an upstream API change is caught;
-- the first start of a fresh copy gives it the Painter keymap and theme, written by ArmorPaint in its config.json;
+- the first start of a fresh copy gives it the Painter keymap and theme, written by ArmorPaint in its config.json,
+  and its title bar says "Singepaint (based on ArmorPaint)" (also once a change marks the project unsaved);
   a config with the member's own choice (ArmorPaint's default keymap and theme) keeps it;
 - `scripts/bindings.c`: every sng_* function on a fresh project, then an export with the studio preset, whose files
   are checked (names, PNG, size).
@@ -44,6 +45,7 @@ SNAPSHOT = HERE / "api_snapshot.h"
 DEFAULT_APP = Path.home() / ".singerie" / "tools" / "armorpaint-layer-build" / "armorpaint"
 EXT_FOLDERS = ("keymap_presets", "themes", "export_presets", "plugins")
 TIMEOUT = 180  # seconds for one ArmorPaint run
+SHOWN_NAME = "Singepaint (based on ArmorPaint)"  # in the title bar instead of "ArmorPaint" (Baptiste, 5 October 2026)
 
 # Singerie's colour rule for map names (singerie_core.texture_sets / colour_names): colour maps say srgb, data raw.
 COLOUR_CHANNELS = {"basecolor", "diffuse", "specular", "emission"}
@@ -213,17 +215,24 @@ def upstream_only(text: str) -> str:
 
 
 def run(app: Path, *arguments: str, environment: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [os.fspath(app / "ArmorPaint.exe"), *arguments],
-        cwd=app,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=TIMEOUT,
-        env=environment,
-        check=False,
-    )
+    """One ArmorPaint run; one that doesn't quit within TIMEOUT is stopped and fails a check (the checks after it
+    then say what its report lacks)."""
+    command = [os.fspath(app / "ArmorPaint.exe"), *arguments]
+    try:
+        return subprocess.run(
+            command,
+            cwd=app,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=TIMEOUT,
+            env=environment,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:  # subprocess.run has stopped that ArmorPaint (only it)
+        check(f"ArmorPaint {' '.join(arguments[:2])} quit within {TIMEOUT} s", False, "stopped")
+        return subprocess.CompletedProcess(command, -1, "", "timed out")
 
 
 def script(tmp: Path, name: str, **values: str) -> Path:
@@ -293,6 +302,8 @@ def check_defaults(app: Path, tmp: Path) -> None:
     check("this start applied the layer's defaults", values.get("defaults") == "applied", values.get("defaults"))
     check("the keymap is the Painter preset", values.get("keymap") == "painter.json", values.get("keymap"))
     check("the theme is the Painter-like theme", values.get("theme") == "painter.json", values.get("theme"))
+    check(f"the build's shown name is {SHOWN_NAME!r}", values.get("name") == SHOWN_NAME, values.get("name"))
+    check("the title bar shows it from the start", values.get("title") == f"untitled - {SHOWN_NAME}", values.get("title"))
     saved = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
     check("ArmorPaint wrote them in its config.json", (saved.get("keymap"), saved.get("theme")) == ("painter.json", "painter.json"), saved.get("keymap"))
 
@@ -311,6 +322,8 @@ def check_defaults(app: Path, tmp: Path) -> None:
 
 
 EXPECTED_BINDINGS = {
+    "title_start": f"untitled - {SHOWN_NAME}",
+    "title_after_change": f"untitled* - {SHOWN_NAME}",
     "count_start": "1",
     "kind_start": "paint",
     "name_start": "Layer 1",
