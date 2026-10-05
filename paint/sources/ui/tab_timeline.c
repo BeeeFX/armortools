@@ -122,6 +122,19 @@ static bool tab_timeline_clip_matches(stage_t *stage, mesh_object_t *mesh) {
 	return false;
 }
 
+static bool tab_timeline_is_clip_instance(i32 mi) {
+	if (mi < 0 || g_project->stages == NULL) {
+		return false;
+	}
+	mesh_object_t *mesh = g_project->_->paint_objects->buffer[mi];
+	for (i32 si = 0; si < g_project->stages->length; ++si) {
+		if (tab_timeline_clip_matches(g_project->stages->buffer[si], mesh)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static mat4_t tab_timeline_nested_transform(i32 mi) {
 	mat4_t result = mat4_identity();
 	if (!tab_timeline_nested_enabled || tab_timeline_edit_stage != NULL || mi < 0 || g_project->stages == NULL) {
@@ -736,7 +749,8 @@ static void tab_timeline_load_mesh_keyframes(float frame_f, bool camera_only, f6
 			tab_timeline_sync_mesh_body(mi);
 			any = true;
 		}
-		else {
+		else if (nxt_kfi >= 0 || tab_timeline_is_clip_instance(mi)) {
+			// Meshes without keyframes are left to scripts and physics
 			i32 oi = tab_timeline_find_mesh_origin(mi);
 			if (oi >= 0) {
 				if (tab_timeline_set_mesh_transform(mi, ((tab_timeline_mesh_origin_t *)tab_timeline_mesh_origins->buffer[oi])->transform)) {
@@ -1478,9 +1492,9 @@ void tab_timeline_add_named_keyframe(char *name, i32 frame) {
 	if (name == NULL || frame < 0 || frame >= tab_timeline_max_frames) {
 		return;
 	}
-	tab_timeline_script_key_t *key = ALLOC_INIT(tab_timeline_script_key_t, {.name = string_copy(name), .frame = frame});
-	i32 layer_count = g_project->_->layers->length;
-	i32 row         = 0;
+	tab_timeline_script_key_t *key         = ALLOC_INIT(tab_timeline_script_key_t, {.name = string_copy(name), .frame = frame});
+	i32                        layer_count = g_project->_->layers->length;
+	i32                        row         = 0;
 	while (row < layer_count && !string_equals(tab_timeline_row_name(row), name)) {
 		++row;
 	}
@@ -1575,9 +1589,9 @@ void tab_timeline_update() {
 		tab_timeline_run_frame_scripts(frame_i);
 	}
 
+	project_reskin_mesh(skin_frame);
 	if (skin_frame != tab_timeline_last_skin_frame) {
 		tab_timeline_last_skin_frame = skin_frame;
-		project_reskin_mesh(skin_frame);
 		if (tab_timeline_loop_frames <= 0) {
 			i32 frames               = project_skin_frames();
 			tab_timeline_loop_frames = frames > 0 && frames < tab_timeline_max_frames ? frames : tab_timeline_max_frames;

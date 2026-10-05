@@ -7,6 +7,7 @@
 #include "iron_array.h"
 #include "iron_draw.h"
 #include "iron_file.h"
+#include "iron_image.h"
 #include "iron_input.h"
 #include "iron_json.h"
 #include "iron_map.h"
@@ -362,10 +363,16 @@ static void minic_api_sig_add(const char *name, const char *sig) {
 }
 
 static void minic_api_register(const char *name, const char *sig, minic_native_fn_t fn) {
-	char stripped[MINIC_MAX_SIG];
-	int  n    = 0;
-	bool skip = false;
-	for (const char *p = sig; *p != '\0' && n < MINIC_MAX_SIG - 1; ++p) {
+	char        stripped[MINIC_MAX_SIG];
+	int         n    = 0;
+	bool        skip = false;
+	const char *p    = sig;
+	if (strncmp(sig, "p:", 2) == 0) {
+		for (; *p != '\0' && *p != '(' && n < MINIC_MAX_SIG - 1; ++p) {
+			stripped[n++] = *p;
+		}
+	}
+	for (; *p != '\0' && n < MINIC_MAX_SIG - 1; ++p) {
 		if (*p == ' ' || *p == ':') {
 			skip = true;
 		}
@@ -518,8 +525,8 @@ void minic_register_builtins() {
 	// iron_array
 	minic_register_array_struct("i8_array_t", (int)sizeof(i8_array_t), MINIC_T_CHAR);
 	minic_register_array_struct("u8_array_t", (int)sizeof(u8_array_t), MINIC_T_CHAR);
-	minic_register_array_struct("i16_array_t", (int)sizeof(i16_array_t), MINIC_T_INT);
-	minic_register_array_struct("u16_array_t", (int)sizeof(u16_array_t), MINIC_T_INT);
+	minic_register_array_struct("i16_array_t", (int)sizeof(i16_array_t), MINIC_T_I16);
+	minic_register_array_struct("u16_array_t", (int)sizeof(u16_array_t), MINIC_T_U16);
 	minic_register_array_struct("i32_array_t", (int)sizeof(i32_array_t), MINIC_T_INT);
 	minic_register_array_struct("u32_array_t", (int)sizeof(u32_array_t), MINIC_T_INT);
 	minic_register_array_struct("f32_array_t", (int)sizeof(f32_array_t), MINIC_T_FLOAT);
@@ -761,6 +768,12 @@ void minic_register_builtins() {
 	MINIC_P(_);
 	MINIC_END();
 
+	MINIC_STRUCT(gpu_texture_t);
+	MINIC_I(width);
+	MINIC_I(height);
+	MINIC_I(format);
+	MINIC_END();
+
 	MINIC_STRUCT(render_target_t);
 	MINIC_S(name);
 	MINIC_I(width);
@@ -903,6 +916,12 @@ static const char *minic_api_type_name(minic_type_t t, minic_type_t deref, const
 	}
 	if (t == MINIC_T_CHAR) {
 		return "char";
+	}
+	if (t == MINIC_T_I16) {
+		return "int16_t";
+	}
+	if (t == MINIC_T_U16) {
+		return "uint16_t";
 	}
 	if (t == MINIC_T_VOID) {
 		return "void";

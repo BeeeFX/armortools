@@ -696,6 +696,12 @@ void tab_meshes_draw_context_menu() {
 		ui_menu_sub_end();
 	}
 
+	if (ui_menu_button(tr("Origin to Geometry"), "", ICON_NONE)) {
+		util_mesh_origin_to_geometry(util_mesh_get_hierarchy(o));
+		g_context->ddirty = 2;
+		return;
+	}
+
 	ui_menu_separator();
 
 	transform_t *t = o->base->transform;
@@ -921,6 +927,9 @@ static vec4_t aabb_center(mesh_data_t *raw) {
 }
 
 void tab_meshes_make_preview(mesh_object_t *o) {
+	if (array_index_of((any_array_t *)g_project->_->paint_objects, o) < 0) {
+		return;
+	}
 	if (tab_meshes_preview_map == NULL) {
 		tab_meshes_preview_map = any_map_create();
 	}

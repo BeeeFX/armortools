@@ -1,7 +1,9 @@
 #include "kong.h"
 #include "dir.h"
 #include <assert.h>
+#ifndef IRON_WASM
 #include <setjmp.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,13 +86,15 @@ size_t                  allocated_globals_size = 0;
 
 uint64_t next_variable_id = 1;
 
-bool               kong_error          = false;
-static jmp_buf     kong_error_jmp;
+bool kong_error = false;
+#ifndef IRON_WASM
+static jmp_buf kong_error_jmp;
+#endif
 static bool        kong_error_jmp_active = false;
-static function   *functions           = NULL;
-static function_id functions_size      = 128;
-static function_id functions_zeroed    = 0;
-function_id        next_function_index = 0;
+static function   *functions             = NULL;
+static function_id functions_size        = 128;
+static function_id functions_zeroed      = 0;
+function_id        next_function_index   = 0;
 
 static void zero_new_function_slots(void) {
 	if (functions_size > functions_zeroed) {
@@ -148,6 +152,11 @@ static void find_referenced_global_for_var(variable v, global_array *globals, bo
 			return;
 		}
 	}
+}
+
+bool is_storage_buffer(type_id t) {
+	type *tt = get_type(t);
+	return tt->array_size == UINT32_MAX && tt->base == uint_id;
 }
 
 void find_referenced_globals(function *f, global_array *globals) {
@@ -1668,17 +1677,21 @@ void error_args(debug_context context, const char *message, va_list args) {
 
 	iron_log_args(IRON_LOG_LEVEL_ERROR, buffer, args);
 	kong_error = true;
+#ifndef IRON_WASM
 	if (kong_error_jmp_active) {
 		longjmp(kong_error_jmp, 1);
 	}
+#endif
 }
 
 void error_args_no_context(const char *message, va_list args) {
 	iron_log_args(IRON_LOG_LEVEL_ERROR, message, args);
 	kong_error = true;
+#ifndef IRON_WASM
 	if (kong_error_jmp_active) {
 		longjmp(kong_error_jmp, 1);
 	}
+#endif
 }
 
 void kong_assert_failed(const char *test, const char *file, int line) {
@@ -3672,6 +3685,18 @@ static definition parse_global(state_t *state, attribute_list attributes, name_i
 		d.kind   = DEFINITION_BVH;
 		d.global = add_global(bvh_type_id, attributes, name.identifier);
 	}
+	else if (type_name == add_name("uint") && array) {
+		// Storage buffer, uint name[];
+		debug_context context = {0};
+		check(array_size == UINT32_MAX && value == NULL, context, "uint[] globals are storage buffers, use uint name[];");
+		type_id array_type_id               = add_type(get_type(uint_id)->name);
+		get_type(array_type_id)->base       = uint_id;
+		get_type(array_type_id)->built_in   = true;
+		get_type(array_type_id)->array_size = UINT32_MAX;
+
+		d.kind   = DEFINITION_CONST_BASIC;
+		d.global = add_global(array_type_id, attributes, name.identifier);
+	}
 	else if (type_name == add_name("float")) {
 		debug_context context = {0};
 		check(value != NULL, context, "const float requires an initialization value");
@@ -5393,7 +5418,7 @@ void resolve_types_in_block(statement *parent, statement *block) {
 			type_id return_type = resolve_types_function->return_type.type;
 			type_id value_type  = s->expression->type.type;
 			bool    mismatch    = !types_compatible(value_type, return_type) ||
-			                      (is_vector_or_scalar(value_type) && is_vector_or_scalar(return_type) && vector_size(value_type) != vector_size(return_type));
+			                (is_vector_or_scalar(value_type) && is_vector_or_scalar(return_type) && vector_size(value_type) != vector_size(return_type));
 			if (value_type != NO_TYPE && return_type != NO_TYPE && mismatch) {
 				debug_context context = {0};
 				error(context, "Return type mismatch %s vs %s in %s", get_name(get_type(value_type)->name), get_name(get_type(return_type)->name),
@@ -6091,6 +6116,14 @@ void gpu_create_shaders_from_kong(char *kong, char **vs, char **fs, int *vs_size
 	}
 
 	kong_error = false;
+#ifdef IRON_WASM
+#define KONG_CHECK_ERROR()                                  \
+	if (kong_error) {                                       \
+		console_info("Warning: Shader compilation failed"); \
+		return;                                             \
+	}
+#else
+#define KONG_CHECK_ERROR()
 	if (setjmp(kong_error_jmp) != 0) { // error() while compiling
 		kong_error_jmp_active = false;
 		console_info("Warning: Shader compilation failed");
@@ -6101,16 +6134,23 @@ void gpu_create_shaders_from_kong(char *kong, char **vs, char **fs, int *vs_size
 		return;
 	}
 	kong_error_jmp_active = true;
+#endif
 
 	char  *from   = "";
 	tokens tokens = tokenize(from, kong);
+	KONG_CHECK_ERROR();
 	parse(from, &tokens);
+	KONG_CHECK_ERROR();
 	resolve_types();
+	KONG_CHECK_ERROR();
 	allocate_globals();
+	KONG_CHECK_ERROR();
 	for (function_id i = 0; get_function(i) != NULL; ++i) {
 		compile_function_block(&get_function(i)->code, get_function(i)->block);
 	}
+	KONG_CHECK_ERROR();
 	analyze();
+	KONG_CHECK_ERROR();
 
 #ifdef _WIN32
 

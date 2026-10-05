@@ -534,6 +534,76 @@ void gpu_shader_init(gpu_shader_t *shader, const void *data, size_t length, gpu_
 	shader->impl.length = length;
 }
 
+#ifdef WITH_BC7
+
+// Gpu bc7 encoder: rgba8 pixels -> compute shader -> bc7 blocks buffer -> blit into the texture
+// Buffer indices follow kong's declaration order in gpu_bc7.shader: constants 0, src 1, dst 2
+#include "metal_bc7.h"
+
+static bool                        bc7_compute_checked = false;
+static id<MTLComputePipelineState> bc7_pipeline        = nil;
+static id<MTLBuffer>               bc7_src             = nil;
+static id<MTLBuffer>               bc7_dst             = nil;
+
+static bool bc7_compute_available() {
+	if (!bc7_compute_checked) {
+		bc7_compute_checked    = true;
+		id<MTLDevice>  device  = get_metal_device();
+		NSError       *error   = nil;
+		id<MTLLibrary> library = [device newLibraryWithSource:[NSString stringWithUTF8String:metal_bc7_source] options:nil error:&error];
+		if (library != nil) {
+			bc7_pipeline = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"bc7_encode"] error:&error];
+		}
+		if (bc7_pipeline == nil || bc7_pipeline.maxTotalThreadsPerThreadgroup < 64) {
+			iron_log("Gpu bc7 encoder unavailable, using cpu%s%s", error != nil ? ": " : "", error != nil ? error.localizedDescription.UTF8String : "");
+			bc7_pipeline = nil;
+		}
+	}
+	return bc7_pipeline != nil;
+}
+
+static void bc7_compute_encode(id<MTLTexture> tex, void *pixels, uint32_t width, uint32_t height) {
+	id<MTLDevice> device      = get_metal_device();
+	uint32_t      blocks_x    = (width + 3) / 4;
+	uint32_t      blocks_y    = (height + 3) / 4;
+	NSUInteger    pixels_size = (NSUInteger)width * height * 4;
+	NSUInteger    blocks_size = (NSUInteger)blocks_x * blocks_y * 16;
+	if (bc7_src == nil || bc7_src.length < pixels_size) {
+		bc7_src = [device newBufferWithLength:pixels_size options:MTLResourceStorageModeShared];
+	}
+	if (bc7_dst == nil || bc7_dst.length < blocks_size) {
+		bc7_dst = [device newBufferWithLength:blocks_size options:MTLResourceStorageModePrivate];
+	}
+	memcpy(bc7_src.contents, pixels, pixels_size);
+	float size[4] = {(float)width, (float)height, (float)blocks_x, (float)blocks_y};
+
+	id<MTLCommandQueue>          queue   = get_metal_queue();
+	id<MTLCommandBuffer>         buffer  = [queue commandBuffer];
+	id<MTLComputeCommandEncoder> compute = [buffer computeCommandEncoder];
+	[compute setComputePipelineState:bc7_pipeline];
+	[compute setBytes:size length:sizeof(size) atIndex:0];
+	[compute setBuffer:bc7_src offset:0 atIndex:1];
+	[compute setBuffer:bc7_dst offset:0 atIndex:2];
+	[compute dispatchThreadgroups:MTLSizeMake((blocks_x + 63) / 64, blocks_y, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+	[compute endEncoding];
+
+	id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
+	[blit copyFromBuffer:bc7_dst
+	           sourceOffset:0
+	      sourceBytesPerRow:blocks_x * 16
+	    sourceBytesPerImage:blocks_size
+	             sourceSize:MTLSizeMake(width, height, 1)
+	              toTexture:tex
+	       destinationSlice:0
+	       destinationLevel:0
+	      destinationOrigin:MTLOriginMake(0, 0, 0)];
+	[blit endEncoding];
+	[buffer commit];
+	[buffer waitUntilCompleted];
+}
+
+#endif
+
 void gpu_texture_init_from_bytes(gpu_texture_t *texture, void *data, uint32_t width, uint32_t height, gpu_texture_format_t format, bool compress) {
 	texture->width  = width;
 	texture->height = height;
@@ -551,12 +621,16 @@ void gpu_texture_init_from_bytes(gpu_texture_t *texture, void *data, uint32_t wi
 	int   bytes_per_image = bytes_per_row * height;
 
 #ifdef WITH_BC7
+	bool bc7_gpu = false;
 	if (compress && gpu_bc7_supported(width, height, format)) {
 		texture->format = GPU_TEXTURE_FORMAT_RGBA32_BC7;
 		mtlformat       = MTLPixelFormatBC7_RGBAUnorm;
-		data            = gpu_bc7_compress(data, width, height);
-		bytes_per_row   = ((width + 3) / 4) * 16; // BC7ENC_BLOCK_SIZE
-		bytes_per_image = bytes_per_row * ((height + 3) / 4);
+		bc7_gpu         = bc7_compute_available();
+		if (!bc7_gpu) {
+			data            = gpu_bc7_compress(data, width, height);
+			bytes_per_row   = ((width + 3) / 4) * 16; // BC7ENC_BLOCK_SIZE
+			bytes_per_image = bytes_per_row * ((height + 3) / 4);
+		}
 	}
 #endif
 
@@ -583,7 +657,15 @@ void gpu_texture_init_from_bytes(gpu_texture_t *texture, void *data, uint32_t wi
 		return;
 	}
 	texture->impl._tex = (__bridge_retained void *)tex;
-	[tex replaceRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0 slice:0 withBytes:data bytesPerRow:bytes_per_row bytesPerImage:bytes_per_image];
+#ifdef WITH_BC7
+	if (bc7_gpu) {
+		bc7_compute_encode(tex, data, width, height);
+	}
+	else
+#endif
+	{
+		[tex replaceRegion:MTLRegionMake2D(0, 0, width, height) mipmapLevel:0 slice:0 withBytes:data bytesPerRow:bytes_per_row bytesPerImage:bytes_per_image];
+	}
 
 #ifdef WITH_BC7
 	if (data != original_data) {
@@ -984,14 +1066,14 @@ void gpu_raytrace_dispatch_rays() {
 	if (_geometry_textures == nil) {
 		_geometry_textures = [device newBufferWithLength:sizeof(MTLResourceID) * GPU_RAYTRACE_MAX_OBJECTS * 3 options:MTLResourceStorageModeShared];
 	}
-	gpu_texture_t *shared_tex[3]   = {_texpaint0, _texpaint1, _texpaint2};
-	MTLResourceID *texture_ids     = (MTLResourceID *)_geometry_textures.contents;
+	gpu_texture_t *shared_tex[3] = {_texpaint0, _texpaint1, _texpaint2};
+	MTLResourceID *texture_ids   = (MTLResourceID *)_geometry_textures.contents;
 	for (int i = 0; i < GPU_RAYTRACE_MAX_OBJECTS; ++i) {
 		int g = i < vb_count ? i : 0;
 		for (int k = 0; k < 3; ++k) {
-			gpu_texture_t *tex         = geometry_tex[g][k] != NULL ? geometry_tex[g][k] : shared_tex[k];
-			id<MTLTexture> mtl_tex     = (__bridge id<MTLTexture>)tex->impl._tex;
-			texture_ids[i * 3 + k]     = mtl_tex.gpuResourceID;
+			gpu_texture_t *tex     = geometry_tex[g][k] != NULL ? geometry_tex[g][k] : shared_tex[k];
+			id<MTLTexture> mtl_tex = (__bridge id<MTLTexture>)tex->impl._tex;
+			texture_ids[i * 3 + k] = mtl_tex.gpuResourceID;
 			if (i < vb_count) {
 				[compute_encoder useResource:mtl_tex usage:MTLResourceUsageRead];
 			}

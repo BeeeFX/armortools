@@ -37,6 +37,13 @@ void project_save_on_next_frame(void *_) {
 }
 
 void project_save(bool save_and_quit) {
+#ifdef IRON_WASM
+	if (!box_projects_is_cloud_path(g_project->_->filepath) && !starts_with(g_project->_->filepath, "/files/")) {
+		box_projects_cloud_save_show(save_and_quit);
+		return;
+	}
+#endif
+
 	if (string_equals(g_project->_->filepath, "")) {
 #ifdef IRON_IOS
 		char *document_directory = iron_save_dialog("", "");
@@ -50,7 +57,7 @@ void project_save(bool save_and_quit) {
 #endif
 	}
 
-#if defined(IRON_WINDOWS) || defined(IRON_LINUX) || defined(IRON_MACOS)
+#if defined(IRON_WINDOWS) || defined(IRON_LINUX) || defined(IRON_MACOS) || defined(IRON_WASM)
 	char *filename = substring(g_project->_->filepath, string_last_index_of(g_project->_->filepath, PATH_SEP) + 1, string_length(g_project->_->filepath) - 4);
 	sys_title_set(string("%s - %s", filename, manifest_title));
 #endif
@@ -208,7 +215,7 @@ void project_new(bool reset_layers) {
 
 	g_context->paint_object->base->transform->scale = (vec4_t){1, 1, 1, 1.0};
 	transform_build_matrix(g_context->paint_object->base->transform);
-	g_context->paint_object->base->name = "Tessellated";
+	g_context->paint_object->base->name    = "Tessellated";
 	g_context->paint_object->base->visible = true;
 
 	while (g_project->_->materials->length > 0) {
@@ -234,9 +241,9 @@ void project_new(bool reset_layers) {
 	        slot_font_create("default.ttf", g_font, ""),
 	    },
 	    1);
-	g_context->font = g_project->_->fonts->buffer[0];
+	g_context->font      = g_project->_->fonts->buffer[0];
 	g_project->_->sounds = any_array_create_from_raw((void *[]){}, 0);
-	g_context->sound    = NULL;
+	g_context->sound     = NULL;
 	project_set_default_swatches();
 	g_context->swatch                = g_project->swatches->buffer[0];
 	g_context->picked_color          = project_make_swatch(0xffffffff);
@@ -389,33 +396,35 @@ i32 project_skin_frames() {
 	i32 frames = 0;
 	for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
 		mesh_data_t *md = ((mesh_object_t *)g_project->_->paint_objects->buffer[i])->data;
-		if (md->_->skin_frames > frames) {
-			frames = md->_->skin_frames;
-		}
+		frames          = math_max(frames, util_skin_frame_count(md->_->skin_blob));
 	}
 	return frames;
 }
 
+// Poses the skinned meshes at a frame
 bool project_reskin_mesh(int frame) {
-#ifdef WITH_PLUGINS
 	bool any = false;
 	for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
-		mesh_data_t *md = ((mesh_object_t *)g_project->_->paint_objects->buffer[i])->data;
-		if (md->_->skin_blob == NULL) {
+		mesh_object_t *o  = g_project->_->paint_objects->buffer[i];
+		mesh_data_t   *md = o->data;
+		if (md->_->skin_blob == NULL || !o->base->visible) {
 			continue;
 		}
 
 		// Each mesh loops over its own animation length
-		i32 mesh_frame = md->_->skin_frames > 0 ? frame % md->_->skin_frames : frame;
-
-		vertex_array_t *pos = mesh_data_get_vertex_array(md, "pos");
-		vertex_array_t *nor = mesh_data_get_vertex_array(md, "nor");
-		if (!plugins_skin_data_apply(md->_->skin_blob, mesh_frame, pos->values, nor->values, &md->scale_pos)) {
+		i32 frames     = util_skin_frame_count(md->_->skin_blob);
+		i32 mesh_frame = frames > 0 ? frame % frames : frame;
+		if (mesh_frame == md->_->skin_frame) {
 			continue;
 		}
 
-		md->_->skin_frames = plugins_skin_frame_count();
+		vertex_array_t *pos = mesh_data_get_vertex_array(md, "pos");
+		vertex_array_t *nor = mesh_data_get_vertex_array(md, "nor");
+		if (!util_skin_apply(md->_->skin_blob, mesh_frame, pos->values, nor->values, &md->scale_pos)) {
+			continue;
+		}
 
+		md->_->skin_frame = mesh_frame;
 		mesh_data_build_vertices(md->_->vertex_buffer, md->vertex_arrays);
 		any = true;
 	}
@@ -435,9 +444,6 @@ bool project_reskin_mesh(int frame) {
 	g_context->ddirty          = 4;
 	render_path_raytrace_ready = false;
 	return true;
-#else
-	return false;
-#endif
 }
 
 void project_unwrap_mesh_box_draw() {

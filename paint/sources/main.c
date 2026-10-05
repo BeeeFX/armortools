@@ -187,6 +187,7 @@
 #include "util/util_clone.c"
 #include "util/util_cursor.c"
 #include "util/util_encode.c"
+#include "util/util_env.c"
 #include "util/util_geom.c"
 #include "util/util_layer.c"
 #include "util/util_mesh.c"
@@ -199,6 +200,7 @@
 #include "util/util_resize.c"
 #include "util/util_select.c"
 #include "util/util_shortcut.c"
+#include "util/util_skin.c"
 #include "util/util_stage.c"
 #include "util/util_stencil.c"
 #include "util/util_texture.c"
@@ -420,6 +422,7 @@ void _kickstart() {
 #ifdef WITH_PLUGINS
 	plugins_init();
 #endif
+	util_skin_init();
 
 	base_init();
 

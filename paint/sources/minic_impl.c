@@ -1,17 +1,68 @@
 
 #include "global.h"
 
-void script_set_stage(char *name) {
-	if (g_project->stages == NULL) {
-		return;
+static i32 script_stage_index(char *name) {
+	if (g_project->stages == NULL || name == NULL) {
+		return -1;
 	}
 	for (i32 i = 0; i < g_project->stages->length; ++i) {
-		stage_t *s = g_project->stages->buffer[i];
-		if (string_equals(s->name, name)) {
-			tab_stages_selected = i;
-			tab_stages_apply(s);
-			return;
+		if (string_equals(g_project->stages->buffer[i]->name, name)) {
+			return i;
 		}
+	}
+	return -1;
+}
+
+void script_set_stage(char *name) {
+	i32 i = script_stage_index(name);
+	if (i >= 0) {
+		tab_stages_selected = i;
+		tab_stages_apply(g_project->stages->buffer[i]);
+	}
+}
+
+void script_stage_create(char *name) {
+	if (name == NULL || script_stage_index(name) >= 0) {
+		return;
+	}
+	if (g_project->stages == NULL) {
+		g_project->stages = any_array_create_from_raw((void *[]){}, 0);
+	}
+	stage_t *s = tab_stages_create_stage(string_copy(name));
+	for (i32 i = 0; i < g_project->_->layers->length; ++i) {
+		string_array_push(s->layers, g_project->_->layers->buffer[i]->name);
+	}
+	any_array_push(g_project->stages, s);
+}
+
+void script_stage_add_object(char *stage, char *object) {
+	i32 i = script_stage_index(stage);
+	if (i < 0 || object == NULL) {
+		return;
+	}
+	stage_t *s = g_project->stages->buffer[i];
+	if (string_array_index_of(s->objects, object) < 0) {
+		string_array_push(s->objects, string_copy(object));
+	}
+}
+
+void script_stage_remove_object(char *stage, char *object) {
+	i32 i = script_stage_index(stage);
+	if (i < 0 || object == NULL) {
+		return;
+	}
+	stage_t *s   = g_project->stages->buffer[i];
+	i32      idx = string_array_index_of(s->objects, object);
+	if (idx >= 0) {
+		array_splice(s->objects, idx, 1);
+	}
+	tab_stages_set_hidden(s, object, false);
+}
+
+void script_stage_set_hidden(char *stage, char *object, bool hidden) {
+	i32 i = script_stage_index(stage);
+	if (i >= 0 && object != NULL) {
+		tab_stages_set_hidden(g_project->stages->buffer[i], string_copy(object), hidden);
 	}
 }
 
@@ -204,6 +255,18 @@ sound_t *script_get_sound(char *s) {
 	return NULL;
 }
 
+i32 script_sound_remove(char *s) {
+	for (int i = 0; i < g_project->_->sounds->length; ++i) {
+		slot_sound_t *sound = g_project->_->sounds->buffer[i];
+		if (string_equals(sound->name, s)) {
+			data_delete_sound(sound->file);
+			array_splice(g_project->_->sounds, i, 1);
+			return 1;
+		}
+	}
+	return 0;
+}
+
 gpu_texture_t *script_get_texture(char *s) {
 	for (int i = 0; i < g_project->_->assets->length; ++i) {
 		if (string_equals(g_project->_->assets->buffer[i]->name, s)) {
@@ -211,6 +274,19 @@ gpu_texture_t *script_get_texture(char *s) {
 		}
 	}
 	return NULL;
+}
+
+void script_texture_delete(char *s) {
+	if (s == NULL || g_project == NULL || g_project->_ == NULL || g_project->_->assets == NULL) {
+		return;
+	}
+	for (int i = 0; i < g_project->_->assets->length; ++i) {
+		asset_t *asset = g_project->_->assets->buffer[i];
+		if (string_equals(asset->name, s)) {
+			tab_textures_delete_texture(asset);
+			return;
+		}
+	}
 }
 
 static bool script_paint_active = false;
@@ -369,6 +445,31 @@ static void script_gpu_end(gpu_texture_t *current, bool in_use) {
 	}
 }
 
+buffer_t *script_get_texture_pixels(gpu_texture_t *texture) {
+	if (texture == NULL || texture->format == GPU_TEXTURE_FORMAT_D32) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	buffer_t *b = gpu_get_texture_pixels(texture);
+	script_gpu_end(current, in_use);
+	return b;
+}
+
+static void script_bake_lightmap_done(void *fn) {
+	if (fn != NULL) {
+		minic_call_fn(fn, NULL, 0);
+	}
+}
+
+void script_bake_lightmap(object_t *o, i32 res, i32 samples, f32 range, char *path, void *done) {
+	if (o == NULL || o->ext == NULL || !string_equals(o->ext_type, "mesh_object_t") || path == NULL) {
+		return;
+	}
+	render_path_raytrace_bake_lightmap(o->ext, res, samples, range, path, script_bake_lightmap_done, done);
+}
+
 void script_quit(void) {
 	iron_stop();
 }
@@ -431,6 +532,14 @@ void script_append_mesh(char *path) {
 	g_context->ddirty = 2;
 }
 
+extern int plugins_skinning_frame;
+
+void script_append_mesh_skinned(char *glb_path) {
+	plugins_skinning_frame = 0;
+	script_append_mesh(glb_path);
+	plugins_skinning_frame = -1;
+}
+
 void script_append_mesh_obj(char *data) {
 	if (data == NULL || data[0] == '\0') {
 		return;
@@ -451,6 +560,58 @@ void script_append_mesh_obj(char *data) {
 	script_append_mesh_finish(first);
 	script_gpu_end(current, in_use);
 	g_context->ddirty = 2;
+}
+
+bool script_packed_asset_save(char *suffix, char *path) {
+	for (i32 i = 0; i < g_project->packed_assets->length; ++i) {
+		packed_asset_t *pa = g_project->packed_assets->buffer[i];
+		if (ends_with(pa->name, suffix)) {
+			iron_file_save_bytes(path, (buffer_t *)pa->bytes, ((buffer_t *)pa->bytes)->length);
+			return true;
+		}
+	}
+	return false;
+}
+
+i32 script_packed_assets_remove(char *search) {
+	if (g_project->packed_assets == NULL || search == NULL) {
+		return 0;
+	}
+	i32 removed = 0;
+	i32 i       = 0;
+	while (i < g_project->packed_assets->length) {
+		if (string_index_of(g_project->packed_assets->buffer[i]->name, search) >= 0) {
+			array_splice(g_project->packed_assets, i, 1);
+			removed++;
+		}
+		else {
+			i++;
+		}
+	}
+	return removed;
+}
+
+i32 script_assets_remove(char *search) {
+	if (search == NULL) {
+		return 0;
+	}
+	i32 removed = 0;
+	i32 i       = 0;
+	while (i < g_project->_->assets->length) {
+		asset_t *a = g_project->_->assets->buffer[i];
+		if (string_index_of(a->file, search) >= 0) {
+			tab_textures_delete_texture(a);
+			removed++;
+		}
+		else {
+			i++;
+		}
+	}
+	return removed;
+}
+
+void script_set_pack_assets(i32 pack) {
+	g_context->pack_assets_on_save = pack != 0;
 }
 
 void script_export_mesh(char *path) {
@@ -835,6 +996,19 @@ void script_object_remove(object_t *o) {
 	if (ui_base_hwnds != NULL && ui_base_hwnds->length > TAB_AREA_SIDEBAR0) {
 		ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
 	}
+}
+
+void script_object_origin_to_geometry(object_t *o) {
+	if (o == NULL || !string_equals(o->ext_type, "mesh_object_t") || array_index_of(g_project->_->paint_objects, o->ext) < 0) {
+		return;
+	}
+
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	util_mesh_origin_to_geometry(util_mesh_get_hierarchy(o->ext));
+	script_gpu_end(current, in_use);
+	g_context->ddirty = 2;
 }
 
 void script_object_set_name(object_t *o, char *name) {

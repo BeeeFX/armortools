@@ -242,6 +242,7 @@ bool                      tab_browser_refresh               = false;
 extern i32                ui_files_selected;
 extern i32                path_point_dragging;
 extern i32                path_layer_last_active;
+extern float              util_uv_unwrap_margin;
 i32                       ui_header_default_h = 30;
 i32                       ui_header_h;
 ui_window_t              *ui_header_handle;
@@ -347,6 +348,8 @@ neural_node_model_t_array_t *neural_node_models      = NULL;
 char *render_path_raytrace_ext = ".cso";
 #elif defined(IRON_METAL)
 char *render_path_raytrace_ext = ".metal";
+#elif defined(IRON_WEBGPU)
+char *render_path_raytrace_ext = ".wgsl";
 #else
 char *render_path_raytrace_ext = ".spirv";
 #endif

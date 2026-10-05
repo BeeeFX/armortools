@@ -112,8 +112,8 @@ static void type_name(type_id id, char *output_name) {
 static void write_types(char *metal, size_t *offset) {
 	function_id vertex_id = find_vertex_function();
 	if (vertex_id != NO_FUNCTION) {
-		function *f = get_function(vertex_id);
-		uint64_t parameter_ids[256] = {0};
+		function *f                  = get_function(vertex_id);
+		uint64_t  parameter_ids[256] = {0};
 		for (uint8_t parameter_index = 0; parameter_index < f->parameters_size; ++parameter_index) {
 			for (size_t i = 0; i < f->block->block.vars.size; ++i) {
 				if (f->parameter_names[parameter_index] == f->block->block.vars.v[i].name) {
@@ -340,6 +340,7 @@ static void assign_resource_bindings(function *kernel) {
 			}
 			else {
 				resource_bindings[id] = buffer_index++;
+				resource_writable[id] = set->globals.writable[i];
 			}
 		}
 	}
@@ -362,6 +363,10 @@ static void write_resource_parameter(char *code, size_t *offset, global_id id, b
 	else if (g->type == bvh_type_id) {
 		sprintf(binding, " [[buffer(%u)]]", index);
 		*offset += sprintf(&code[*offset], "instance_acceleration_structure _%" PRIu64 "%s", g->var_index, kernel ? binding : "");
+	}
+	else if (is_storage_buffer(g->type)) {
+		sprintf(binding, " [[buffer(%u)]]", index);
+		*offset += sprintf(&code[*offset], "%sdevice uint *_%" PRIu64 "%s", resource_writable[id] ? "" : "const ", g->var_index, kernel ? binding : "");
 	}
 	else {
 		char name[256];
@@ -596,10 +601,7 @@ static void write_functions(char *code, size_t *offset) {
 			}
 		}
 		else if (is_compute_function(i)) {
-			*offset +=
-			    sprintf(&code[*offset],
-			            "kernel void %s(uint3 _kong_dispatch_thread_id [[thread_position_in_grid]]",
-			            get_name(f->name));
+			*offset += sprintf(&code[*offset], "kernel void %s(uint3 _kong_dispatch_thread_id [[thread_position_in_grid]]", get_name(f->name));
 			for (uint8_t parameter_index = 1; parameter_index < f->parameters_size; ++parameter_index) {
 				*offset += sprintf(&code[*offset], ", %s _%" PRIu64, type_string(f->parameter_types[0].type), parameter_ids[0]);
 			}
@@ -984,7 +986,7 @@ char *metal_export(char *directory) {
 	check(vertex_id != NO_FUNCTION, context, "vert() missing");
 	check(fragment_id != NO_FUNCTION, context, "frag() missing");
 
-	function *vertex_shader = get_function(vertex_id);
+	function *vertex_shader                 = get_function(vertex_id);
 	vertex_functions[vertex_functions_size] = vertex_id;
 	vertex_functions_size += 1;
 
@@ -993,7 +995,7 @@ char *metal_export(char *directory) {
 		vertex_inputs_size += 1;
 	}
 
-	function *fragment_shader = get_function(fragment_id);
+	function *fragment_shader                   = get_function(fragment_id);
 	fragment_functions[fragment_functions_size] = fragment_id;
 	fragment_functions_size += 1;
 
