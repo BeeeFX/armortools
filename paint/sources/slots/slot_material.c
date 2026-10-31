@@ -3,6 +3,29 @@
 
 buffer_t *slot_material_default_canvas = NULL;
 
+static bool slot_material_is_unique_name(ui_node_canvas_t *self, char *name) {
+	for (i32 i = 0; i < g_project->_->materials->length; ++i) {
+		ui_node_canvas_t *c = g_project->_->materials->buffer[i]->canvas;
+		if (c != self && string_equals(c->name, name)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+char *slot_material_unique_name(ui_node_canvas_t *self, char *name) {
+	if (slot_material_is_unique_name(self, name)) {
+		return name;
+	}
+	char *base;
+	i32   i   = strings_split_number_ext(name, &base);
+	char *res = string_tmp("%s%s", base, strings_number_ext(++i));
+	while (!slot_material_is_unique_name(self, res)) {
+		res = string_tmp("%s%s", base, strings_number_ext(++i));
+	}
+	return res;
+}
+
 slot_material_t *slot_material_create(shader_data_t *m, ui_node_canvas_t *c) {
 	slot_material_t *raw = ALLOC_INIT(slot_material_t, {0});
 	raw->nodes           = ui_nodes_create();
@@ -10,7 +33,6 @@ slot_material_t *slot_material_create(shader_data_t *m, ui_node_canvas_t *c) {
 	raw->id              = 0;
 	raw->paint_base      = true;
 	raw->paint_opac      = true;
-	raw->paint_opac_mode = OPACITY_MODE_ALPHA;
 	raw->paint_occ       = true;
 	raw->paint_rough     = true;
 	raw->paint_met       = true;
@@ -46,6 +68,7 @@ slot_material_t *slot_material_create(shader_data_t *m, ui_node_canvas_t *c) {
 	else {
 		raw->canvas = util_clone_canvas(c);
 	}
+	raw->canvas->name = string_copy(slot_material_unique_name(raw->canvas, raw->canvas->name));
 
 	if (g_config->node_previews) {
 		for (i32 i = 0; i < raw->canvas->nodes->length; ++i) {
@@ -71,6 +94,7 @@ void slot_material_unload(slot_material_t *raw) {
 
 void slot_material_delete(slot_material_t *raw) {
 	slot_material_unload(raw);
+	make_material_delete_node_previews(raw, NULL);
 	i32 mpos = array_index_of(g_project->_->materials, raw);
 	array_remove(g_project->_->materials, raw);
 	if (g_project->_->materials->length > 0) {

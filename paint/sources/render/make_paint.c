@@ -5,6 +5,57 @@ bool make_paint_is_raytraced_bake() {
 	return g_context->bake_type == BAKE_TYPE_INIT;
 }
 
+#define MAKE_PAINT_CACHE_SIZE 4
+
+typedef struct make_paint_cached_shader {
+	char *kong;
+	char *vs;
+	char *fs;
+	i32   vs_size;
+	i32   fs_size;
+} make_paint_cached_shader_t;
+
+static make_paint_cached_shader_t make_paint_cache[MAKE_PAINT_CACHE_SIZE];
+static i32                        make_paint_cache_next = 0;
+
+// Size 0 means text output
+static char *make_paint_copy_shader(char *s, i32 size) {
+	i32   n   = size > 0 ? size : (i32)strlen(s) + 1;
+	char *res = malloc(n);
+	memcpy(res, s, n);
+	return res;
+}
+
+// Callers own the returned shaders
+static void make_paint_create_shaders(char *kong, char **vs, char **fs, i32 *vs_size, i32 *fs_size) {
+	for (i32 i = 0; i < MAKE_PAINT_CACHE_SIZE; ++i) {
+		make_paint_cached_shader_t *c = &make_paint_cache[i];
+		if (c->kong != NULL && strcmp(c->kong, kong) == 0) {
+			*vs      = make_paint_copy_shader(c->vs, c->vs_size);
+			*fs      = make_paint_copy_shader(c->fs, c->fs_size);
+			*vs_size = c->vs_size;
+			*fs_size = c->fs_size;
+			return;
+		}
+	}
+
+	gpu_create_shaders_from_kong(kong, vs, fs, vs_size, fs_size);
+	if (*vs == NULL || *fs == NULL || (*vs_size == 0 && (*vs)[0] == '\0')) {
+		return; // Failed to compile
+	}
+
+	make_paint_cached_shader_t *c = &make_paint_cache[make_paint_cache_next];
+	make_paint_cache_next         = (make_paint_cache_next + 1) % MAKE_PAINT_CACHE_SIZE;
+	free(c->kong);
+	free(c->vs);
+	free(c->fs);
+	c->kong    = string_copy(kong);
+	c->vs      = make_paint_copy_shader(*vs, *vs_size);
+	c->fs      = make_paint_copy_shader(*fs, *fs_size);
+	c->vs_size = *vs_size;
+	c->fs_size = *fs_size;
+}
+
 bool make_paint_is_zero_constant(char *s) {
 	char *end;
 	f32   f = strtof(s, &end);
@@ -214,6 +265,16 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 
 	node_shader_write_vert(kong, "output.pos = float4(tpos, 0.0, 1.0);");
 
+	if (g_context->tool == TOOL_TYPE_BLUR) {
+		node_shader_add_out(kong, "float2 blur_uv");
+		node_shader_write_vert(kong, string_tmp("output.blur_uv = %s;", tuv));
+	}
+
+	if (g_context->select_active && g_context->select_2d) {
+		node_shader_add_out(kong, "float2 select_uv");
+		node_shader_write_vert(kong, string_tmp("output.select_uv = %s;", tuv));
+	}
+
 	bool decal_layer = g_context->layer->fill_material != NULL && g_context->layer->uv_type == UV_TYPE_PROJECT;
 	if (decal_layer) {
 		node_shader_add_constant(kong, "float4x4 WVP", "_decal_layer_matrix");
@@ -244,7 +305,12 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 	node_shader_write_frag(kong, "bsp = bsp * 0.5 + 0.5;");
 
 	// Select tool mask
-	if (g_context->select_active) {
+	if (g_context->select_active && g_context->select_2d) {
+		node_shader_add_constant(kong, "float4 select_mask", "_select_mask");
+		node_shader_write_frag(kong, "if (input.select_uv.x < constants.select_mask.x || input.select_uv.x > constants.select_mask.z || input.select_uv.y < "
+		                             "constants.select_mask.y || input.select_uv.y > constants.select_mask.w) { discard; }");
+	}
+	else if (g_context->select_active) {
 		node_shader_add_constant(kong, "float4 select_mask", "_select_mask");
 		node_shader_write_frag(kong, "if (sp.x < constants.select_mask.x || sp.x > constants.select_mask.z || sp.y < constants.select_mask.y || sp.y > "
 		                             "constants.select_mask.w) { discard; }");
@@ -330,7 +396,16 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 		node_shader_add_texture(kong, tex_pack_src, tex_pack_link);
 
 		if (g_context->tool == TOOL_TYPE_CLONE) {
-			make_clone_run(kong);
+			if (g_context->clone_layers == CLONE_LAYERS_VISIBLE) {
+				// Visible layers flattened at stroke start
+				node_shader_add_texture(kong, "texpaint_ref", "_texpaint_ref");
+				node_shader_add_texture(kong, "texpaint_nor_ref", "_texpaint_nor_ref");
+				node_shader_add_texture(kong, "texpaint_pack_ref", "_texpaint_pack_ref");
+				make_clone_run(kong, "texpaint_ref", "texpaint_nor_ref", "texpaint_pack_ref");
+			}
+			else {
+				make_clone_run(kong, tex_src, tex_nor_src, tex_pack_src);
+			}
 		}
 		else { // Blur, Smudge
 			make_blur_run(kong);
@@ -364,12 +439,15 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 		node_shader_write_frag(kong, string_tmp("float3 nortan = %s;", nortan));
 		node_shader_write_frag(kong, string_tmp("float height = %s;", height));
 		node_shader_write_frag(kong, string_tmp("float mat_opacity = %s;", opac));
-		if (g_context->material->paint_opac_mode == OPACITY_MODE_TRANSLUC) {
-			make_material_transluc_used = true;
-			node_shader_write_frag(kong, "float opacity = 1.0;");
-		}
-		else {
-			node_shader_write_frag(kong, "float opacity = mat_opacity;");
+		node_shader_write_frag(kong, "float opacity = mat_opacity;");
+
+		// Fill layers write the material opacity directly, anything but a constant 1.0 on the bottom layer makes it see-through
+		if (g_context->layer->fill_material != NULL && g_context->layer == g_project->_->layers->buffer[0] && g_context->material->paint_opac) {
+			char *end;
+			f32   v = strtof(opac, &end);
+			if (*end != '\0' || v < 1.0) {
+				layers_enable_translucency();
+			}
 		}
 
 		if (g_context->layer->fill_material == NULL) {
@@ -562,7 +640,7 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 		node_shader_write_frag(kong,
 		                       "output[0] = float4((basecol * t_blur + sample_undo.rgb * sample_undo.a * (1.0 - t_blur)) / max(out_a, 0.0000001), out_a);");
 	}
-	else if (g_context->material->paint_opac_mode == OPACITY_MODE_TRANSLUC || g_context->layer->fill_material != NULL) {
+	else if (g_context->layer->fill_material != NULL) {
 		node_shader_write_frag(kong, string_tmp("output[0] = float4(%s, %s);",
 		                                        make_material_blend_mode(kong, g_context->brush_blending, "sample_undo.rgb", "basecol", "str"), "mat_opacity"));
 	}
@@ -631,8 +709,8 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 	sculpt_make_paint_run(kong);
 
 	con_paint->data->shader_from_source = true;
-	gpu_create_shaders_from_kong(node_shader_get(kong), &con_paint->data->vertex_shader, &con_paint->data->fragment_shader,
-	                             &con_paint->data->_->vertex_shader_size, &con_paint->data->_->fragment_shader_size);
+	make_paint_create_shaders(node_shader_get(kong), &con_paint->data->vertex_shader, &con_paint->data->fragment_shader,
+	                          &con_paint->data->_->vertex_shader_size, &con_paint->data->_->fragment_shader_size);
 
 	return con_paint;
 }

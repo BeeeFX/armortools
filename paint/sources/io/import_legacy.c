@@ -118,13 +118,16 @@ project_t *import_arm_from_map_to_arm(any_map_t *old) {
 			any_array_push(project->packed_assets, pa);
 		}
 	}
-	project->envmap          = string_copy(any_map_get(old, "envmap"));
-	project->envmap_strength = armpack_map_get_f32(old, "envmap_strength");
-	project->envmap_angle    = armpack_map_get_f32(old, "envmap_angle");
-	project->envmap_blur     = armpack_map_get_i32(old, "envmap_blur");
-	project->camera_world    = any_map_get(old, "camera_world");
-	project->camera_origin   = any_map_get(old, "camera_origin");
-	project->camera_fov      = armpack_map_get_f32(old, "camera_fov");
+	project->envmap                 = string_copy(any_map_get(old, "envmap"));
+	project->envmap_strength        = armpack_map_get_f32(old, "envmap_strength");
+	project->envmap_angle           = armpack_map_get_f32(old, "envmap_angle");
+	project->envmap_blur            = armpack_map_get_i32(old, "envmap_blur");
+	project->camera_world           = any_map_get(old, "camera_world");
+	project->camera_origin          = any_map_get(old, "camera_origin");
+	project->camera_fov             = armpack_map_get_f32(old, "camera_fov");
+	project->camera_near            = armpack_map_get_f32(old, "camera_near");
+	project->camera_far             = armpack_map_get_f32(old, "camera_far");
+	project->camera_frustum_culling = armpack_map_get_i32(old, "camera_frustum_culling") > 0;
 
 	any_array_t *ss = any_map_get(old, "swatches");
 	if (ss != NULL) {
@@ -167,7 +170,6 @@ project_t *import_arm_from_map_to_arm(any_map_t *old) {
 			md->paint_height      = armpack_map_get_i32(old, "paint_height") > 0;
 			md->paint_emis        = armpack_map_get_i32(old, "paint_emis") > 0;
 			md->paint_subs        = armpack_map_get_i32(old, "paint_subs") > 0;
-			md->opac_mode         = armpack_map_get_i32(old, "opac_mode");
 			any_array_push(project->material_datas, md);
 		}
 	}
@@ -272,6 +274,7 @@ project_t *import_arm_from_map_to_arm(any_map_t *old) {
 			d->texpaint                         = any_map_get(old, "texpaint");
 			d->texpaint_nor                     = any_map_get(old, "texpaint_nor");
 			d->texpaint_pack                    = any_map_get(old, "texpaint_pack");
+			d->texpaint_sculpt                  = any_map_get(old, "texpaint_sculpt");
 			d->path_points                      = any_map_get(old, "path_points");
 			d->path_points_world                = any_map_get(old, "path_points_world");
 			d->path_points_camera               = any_map_get(old, "path_points_camera");
@@ -311,7 +314,49 @@ project_t *import_arm_from_map_to_arm(any_map_t *old) {
 		}
 	}
 
+	project->mesh_nodes         = import_arm_get_node_canvas_array(old, "mesh_nodes");
+	project->mesh_nodes_objects = any_map_get(old, "mesh_nodes_objects");
+	project->mesh_paths         = any_map_get(old, "mesh_paths");
+
 	return project;
+}
+
+project_t *import_arm_from_version_21(any_map_t *old) {
+	// slot_material_t->paint_opac_mode removed
+	return import_arm_from_map_to_arm(old);
+}
+
+project_t *import_arm_from_version_20(any_map_t *old) {
+	project_t *project              = import_arm_from_version_21(old);
+	project->camera_frustum_culling = false;
+	return project;
+}
+
+project_t *import_arm_from_version_19(any_map_t *old) {
+	armpack_map_set_f32(old, "camera_near", 0.01);
+	armpack_map_set_f32(old, "camera_far", 100.0);
+	return import_arm_from_version_20(old);
+}
+
+project_t *import_arm_from_version_18(any_map_t *old) {
+	any_map_set(old, "mesh_paths", NULL);
+	return import_arm_from_version_19(old);
+}
+
+project_t *import_arm_from_version_17(any_map_t *old) {
+	any_map_set(old, "mesh_nodes", NULL);
+	any_map_set(old, "mesh_nodes_objects", NULL);
+	return import_arm_from_version_18(old);
+}
+
+project_t *import_arm_from_version_16(any_map_t *old) {
+	any_array_t *tls = any_map_get(old, "timeline_layers");
+	if (tls != NULL) {
+		for (i32 i = 0; i < tls->length; ++i) {
+			any_map_set(tls->buffer[i], "texpaint_sculpt", NULL);
+		}
+	}
+	return import_arm_from_version_17(old);
 }
 
 project_t *import_arm_from_version_15(any_map_t *old) {
@@ -328,7 +373,7 @@ project_t *import_arm_from_version_15(any_map_t *old) {
 			any_map_set(stages->buffer[i], "nested_mesh", NULL);
 		}
 	}
-	return import_arm_from_map_to_arm(old);
+	return import_arm_from_version_16(old);
 }
 
 project_t *import_arm_from_version_14(any_map_t *old) {
@@ -424,7 +469,6 @@ project_t *import_arm_from_version_6(any_map_t *old) {
 		armpack_map_set_i32(m, "paint_height", 1);
 		armpack_map_set_i32(m, "paint_emis", 1);
 		armpack_map_set_i32(m, "paint_subs", 1);
-		armpack_map_set_i32(m, "opac_mode", 0);
 		any_array_push(mds, m);
 	}
 	any_map_set(old, "material_datas", mds);
@@ -483,10 +527,11 @@ project_t *import_arm_from_version_0(any_map_t *old) {
 project_t *import_arm_from_old(buffer_t *b) {
 	any_map_t *old                   = armpack_decode_to_map(b);
 	project_t *(*fns[])(any_map_t *) = {
-	    import_arm_from_version_0,  import_arm_from_version_1,  import_arm_from_version_2,  import_arm_from_version_3,
-	    import_arm_from_version_4,  import_arm_from_version_5,  import_arm_from_version_6,  import_arm_from_version_7,
-	    import_arm_from_version_8,  import_arm_from_version_9,  import_arm_from_version_10, import_arm_from_version_11,
-	    import_arm_from_version_12, import_arm_from_version_13, import_arm_from_version_14, import_arm_from_version_15,
+	    import_arm_from_version_0,  import_arm_from_version_1,  import_arm_from_version_2,  import_arm_from_version_3,  import_arm_from_version_4,
+	    import_arm_from_version_5,  import_arm_from_version_6,  import_arm_from_version_7,  import_arm_from_version_8,  import_arm_from_version_9,
+	    import_arm_from_version_10, import_arm_from_version_11, import_arm_from_version_12, import_arm_from_version_13, import_arm_from_version_14,
+	    import_arm_from_version_15, import_arm_from_version_16, import_arm_from_version_17, import_arm_from_version_18, import_arm_from_version_19,
+	    import_arm_from_version_20, import_arm_from_version_21,
 	};
 	for (i32 v = sizeof(fns) / sizeof(fns[0]) - 1; v >= 0; --v) {
 		if (import_arm_is_version(b, i32_to_string(v))) {

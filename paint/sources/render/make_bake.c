@@ -12,13 +12,9 @@ char *make_bake_axis_string(i32 i) {
 
 void make_bake_run(node_shader_context_t *con, node_shader_t *kong) {
 	if (g_context->bake_type == BAKE_TYPE_CURVATURE) {
-		bool  pass     = parser_material_bake_passthrough;
-		char *strength = pass ? parser_material_bake_passthrough_strength : f32_to_string(g_context->bake_curv_strength);
-		char *radius   = pass ? parser_material_bake_passthrough_radius : f32_to_string(g_context->bake_curv_radius);
-		char *offset   = pass ? parser_material_bake_passthrough_offset : f32_to_string(g_context->bake_curv_offset);
-		strength       = string_tmp("float(%s)", strength);
-		radius         = string_tmp("float(%s)", radius);
-		offset         = string_tmp("float(%s)", offset);
+		char *strength = string_tmp("float(%s)", f32_to_string(g_context->bake_curv_strength));
+		char *radius   = string_tmp("float(%s)", f32_to_string(g_context->bake_curv_radius));
+		char *offset   = string_tmp("float(%s)", f32_to_string(g_context->bake_curv_offset));
 		kong->frag_n   = true;
 		node_shader_write_frag(kong, "float3 dx = ddx(n);");
 		node_shader_write_frag(kong, "float3 dy = ddy(n);");
@@ -36,9 +32,32 @@ void make_bake_run(node_shader_context_t *con, node_shader_t *kong) {
 		node_shader_add_texture(kong, "texpaint_undo", "_texpaint_undo"); // Baked high-poly normals
 		node_shader_write_frag(kong,
 		                       "float3 n0 = sample_lod(texpaint_undo, sampler_linear, tex_coord, 0.0).rgb * float3(2.0, 2.0, 2.0) - float3(1.0, 1.0, 1.0);");
-		node_shader_add_function(kong, str_cotangent_frame);
-		node_shader_write_frag(kong, "float3x3 invTBN = transpose(cotangent_frame(n, n, tex_coord));");
-		node_shader_write_frag(kong, "float3 res = normalize(invTBN * n0) * float3(0.5, 0.5, 0.5) + float3(0.5, 0.5, 0.5);");
+		// Tangent basis solved from the uv derivatives
+		kong->frag_wposition = true;
+		node_shader_write_frag(kong, "float3 bake_dp1 = ddx(input.wposition);");
+		node_shader_write_frag(kong, "float3 bake_dp2 = ddy(input.wposition);");
+		node_shader_write_frag(kong, "float2 bake_duv1 = ddx(tex_coord);");
+		node_shader_write_frag(kong, "float2 bake_duv2 = ddy(tex_coord);");
+		node_shader_write_frag(kong, "float bake_u1 = bake_duv1.x;");
+		node_shader_write_frag(kong, "float bake_v1 = bake_duv1.y;");
+		node_shader_write_frag(kong, "float bake_u2 = bake_duv2.x;");
+		node_shader_write_frag(kong, "float bake_v2 = bake_duv2.y;");
+		node_shader_write_frag(kong, "float bake_s = 1.0;");
+		node_shader_write_frag(kong, "if (bake_u1 * bake_v2 - bake_u2 * bake_v1 < 0.0) { bake_s = -1.0; }");
+		node_shader_write_frag(kong, "float3 bake_tu = (bake_dp1 * bake_v2 - bake_dp2 * bake_v1) * bake_s;");
+		node_shader_write_frag(kong, "float3 bake_tv = (bake_dp2 * bake_u1 - bake_dp1 * bake_u2) * bake_s;");
+		node_shader_write_frag(kong, "float3 bake_t = bake_tu - n * dot(n, bake_tu);");
+		node_shader_write_frag(kong, "float3 res = float3(0.5, 0.5, 1.0);");
+		// Zero area triangles, like the poles of a uv sphere
+		node_shader_write_frag(kong, "if (dot(bake_t, bake_t) > dot(bake_tu, bake_tu) * 0.000001) {");
+		node_shader_write_frag(kong, "	bake_t = normalize(bake_t);");
+		node_shader_write_frag(kong, "	float3 bake_b = bake_tv - n * dot(n, bake_tv) - bake_t * dot(bake_t, bake_tv);");
+		node_shader_write_frag(kong, "	if (dot(bake_b, bake_b) > dot(bake_tv, bake_tv) * 0.000001) {");
+		node_shader_write_frag(kong, "		bake_b = normalize(bake_b);");
+		node_shader_write_frag(
+		    kong, "		res = normalize(float3(dot(n0, bake_t), 0.0 - dot(n0, bake_b), dot(n0, n))) * float3(0.5, 0.5, 0.5) + float3(0.5, 0.5, 0.5);");
+		node_shader_write_frag(kong, "	}");
+		node_shader_write_frag(kong, "}");
 		node_shader_write_frag(kong, "output[0] = float4(res, 1.0);");
 	}
 	else if (g_context->bake_type == BAKE_TYPE_NORMAL_OBJECT) {
