@@ -1,8 +1,14 @@
 # Core patches
 
-A core patch is a change to one of upstream ArmorPaint's own files. This layer carries **none**, and that is the
-goal: everything it adds lives in `layer/` (data files and the native module in `layer/native/`, compiled in through
-upstream's own `paint/plugins/external/` hook).
+A core patch is a change to one of upstream ArmorPaint's own files. Having none is the goal: everything the layer
+adds lives in `layer/` (data files and the native module in `layer/native/`, compiled in through the
+`paint/plugins/external/` hook).
+
+It carries **one** since 31 October 2026: `0001-restore-external-hook.patch` (15 lines in `paint/plugins/project.c`
+and `paint/plugins/plugins.c`) puts back that hook, exactly as upstream had it until it removed it on 22 October
+2026 (`4f08044`, "paint: cleanup"). Without it the native module, and so every `sng_*` function, the defaults and the
+Singepaint title, wouldn't be compiled in. It is "local" for now: offering the hook back upstream is the admin's call
+(GAPS.md › Small upstream pull requests). If upstream takes it back, delete the file and its line in `series`.
 
 ## The budget
 
@@ -27,8 +33,9 @@ never live long.
   Gap: <GAPS.md item it serves>
   ```
 
-- The build applies them to its copy of the tree (never to the repository itself) before compiling. The build tool
-  doesn't apply patches yet: add that the day the first one is needed.
+- The build applies them to its copy of the tree (never to the repository itself) before compiling, with
+  `git apply`, in `series` order; one that no longer applies stops the build with git's message (refresh it on the new
+  upstream commit: `git worktree add --detach <tmp> <commit>`, make the change, commit, `git format-patch -1`).
 
 ## What doesn't count as a patch
 
