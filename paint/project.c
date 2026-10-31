@@ -16,9 +16,11 @@ project_t *main() {
 	flags->with_raytrace       = true;
 	flags->with_bc7            = true;
 	flags->with_audio          = platform == PLATFORM_LINUX || platform == PLATFORM_WINDOWS || platform == PLATFORM_WASM;
-	flags->idle_sleep          = true;
+	flags->idle_sleep          = !has_arg("--debug");
 	flags->export_version_info = true;
 	flags->export_data_list    = platform == PLATFORM_ANDROID; // .apk contents
+	bool with_tcc              = false;                        // Compile scripts with libtcc
+	bool with_mipmaps          = false;
 
 	if (platform == PLATFORM_WASM) {
 		flags->with_nfd         = false;
@@ -42,5 +44,22 @@ project_t *main() {
 	add_assets(project, "assets/meshes/default/*", "data/meshes/{name}", 0); // Embed default mesh
 	add_assets(project, "assets/locale/*", "data/locale/{name}", 0);
 	add_assets(project, "assets/readme/readme.txt", "{name}", 0);
+	if (with_tcc) {
+		add_define(project, "WITH_TCC");
+		add_cfiles(project, "../base/sources/libs/minic_tcc.c");
+		if (!fs_exists("build/tinycc/libtcc.c")) {
+			os_popen(string("unzip -qo %s/../base/tools/tcc/src.zip -d %s/build", flags->dirname, flags->dirname));
+			fs_writefile("build/tinycc/config.h", "#define TCC_VERSION \"0.9.28rc\"\n#define CONFIG_TCC_PREDEFS 1\n");
+			fs_writefile("build/tinycc/tccdefs_.h", "\"\"\n");
+		}
+		add_include_dir(project, "build/tinycc");
+		add_cfiles(project, "build/tinycc/libtcc.c");
+	}
+	if (!flags->embed) {
+		add_assets(project, "../base/assets/extra/*", "data/{name}", 0); // font_cjk.ttc
+	}
+	if (with_mipmaps) {
+		add_define(project, "WITH_MIPMAPS");
+	}
 	return project;
 }

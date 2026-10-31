@@ -454,6 +454,10 @@ LRESULT WINAPI IronWindowsMessageProcedure(HWND hWnd, UINT msg, WPARAM wParam, L
 		else {
 			iron_internal_mouse_window_deactivated();
 			iron_internal_background_callback();
+			for (int i = 0; i < 256; ++i) {
+				keyPressed[i] = false;
+			}
+			controlDown = false;
 #ifdef HANDLE_ALT_ENTER
 			altDown = false;
 #endif
@@ -999,26 +1003,28 @@ static DWORD getExStyle(int features) {
 
 int iron_window_x() {
 	RECT rect;
-	GetWindowRect(windows[0].handle, &rect);
-	windows[0].x = rect.left;
+	if (GetWindowRect(windows[0].handle, &rect)) {
+		windows[0].x = rect.left;
+	}
 	return windows[0].x;
 }
 
 int iron_window_y() {
 	RECT rect;
-	GetWindowRect(windows[0].handle, &rect);
-	windows[0].y = rect.top;
+	if (GetWindowRect(windows[0].handle, &rect)) {
+		windows[0].y = rect.top;
+	}
 	return windows[0].y;
 }
 
 int iron_window_width() {
-	RECT rect;
+	RECT rect = {0};
 	GetClientRect(windows[0].handle, &rect);
 	return rect.right;
 }
 
 int iron_window_height() {
-	RECT rect;
+	RECT rect = {0};
 	GetClientRect(windows[0].handle, &rect);
 	return rect.bottom;
 }
@@ -1754,6 +1760,7 @@ volatile int  iron_exec_async_done        = 1;
 char         *iron_exec_async_output_file = NULL;
 static HANDLE child_handle                = NULL;
 static HANDLE wait_handle                 = NULL;
+static HANDLE child_job                   = NULL;
 
 static void CALLBACK exec_wait_callback(PVOID lparam, BOOLEAN b) {
 	iron_exec_async_done = 1;
@@ -1807,7 +1814,14 @@ void iron_exec_async(const char *path, char *argv[]) {
 		si.hStdError  = out_handle;
 	}
 
-	BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+	if (child_job == NULL) {
+		child_job                                  = CreateJobObjectW(NULL, NULL);
+		JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit = {0};
+		limit.BasicLimitInformation.LimitFlags     = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+		SetInformationJobObject(child_job, JobObjectExtendedLimitInformation, &limit, sizeof(limit));
+	}
+
+	BOOL success = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &si, &pi);
 	if (out_handle != INVALID_HANDLE_VALUE) {
 		CloseHandle(out_handle);
 	}
@@ -1818,6 +1832,10 @@ void iron_exec_async(const char *path, char *argv[]) {
 		iron_exec_async_done = 1;
 		return;
 	}
+	if (child_job != NULL) {
+		AssignProcessToJobObject(child_job, pi.hProcess);
+	}
+	ResumeThread(pi.hThread);
 	child_handle = pi.hProcess;
 	CloseHandle(pi.hThread);
 	RegisterWaitForSingleObject(&wait_handle, child_handle, exec_wait_callback, NULL, INFINITE, WT_EXECUTEONLYONCE);

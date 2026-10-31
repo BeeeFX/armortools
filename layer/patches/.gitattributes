@@ -1,0 +1,2 @@
+# Patches keep their bytes (LF), whatever core.autocrlf says: git apply reads them as written.
+*.patch -text
