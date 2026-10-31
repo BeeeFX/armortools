@@ -5,8 +5,9 @@ painting app, kept by the collective that uses Singerie. Its `main` branch is up
 `sng/main` adds one folder, [`layer/`](layer/README.md), that makes ArmorPaint feel more like Substance 3D Painter:
 Painter's shortcuts and a Painter-like dark theme as the defaults, export presets that name the textures the way the
 collective's pipeline expects, and new script functions plugins can use to build layer stacks, masks and groups,
-undo and redo, set the bake settings and export. Nothing in upstream's own files is changed; the new functions are
-compiled in through a hook upstream provides for exactly that. Run `git diff main...sng/main` to see everything this
+undo and redo, set the bake settings and export. The new functions are compiled in through a small hook for
+exactly that, which upstream had until 22 October 2026 and which the layer puts back with its one 15-line patch,
+applied at build time (`layer/patches/`); no other upstream file is changed. Run `git diff main...sng/main` to see everything this
 copy adds.
 
 Builds made from `sng/main` are altered versions of ArmorPaint, "based on ArmorPaint", and say so: their title bar
