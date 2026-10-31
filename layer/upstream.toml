@@ -5,14 +5,15 @@
 [upstream]
 repository = "https://github.com/armory3d/armorpaint"
 branch = "main"
-commit = "4c06b93b8e0c8a9723c7d6711940177a29b38891"
-date = "2026-10-04"
+commit = "49e90336886b40e78678b4da5b02f4ccb8be255c"
+date = "2026-10-29"
 # ArmorPaint's manifest_version at that commit (its About box shows it).
 version = "1.1alpha"
 
 [toolchain]
 # Upstream builds with clang (Visual Studio's ClangCL toolset on Windows; its project notes clang 19 for one optional
-# flag). Visual Studio 2022's clang-cl 16.0.5 builds the pinned commit unchanged (5 October 2026): members' builds.
+# flag). Visual Studio 2022's clang-cl 16.0.5 built 4c06b93 unchanged (5 October 2026) and
+# 49e9033 with the layer's hook patch (31 October 2026): members' builds.
 # Without clang, the build tool switches a copy of the project to MSVC (v143) and makes three mechanical syntax
 # changes in that copy only (layer/README.md > Building on Windows): scratch builds for tests, never for members.
 windows = "Visual Studio 2022 with C++ Clang tools (ClangCL, clang-cl 16.0.5 checked); v143 for scratch builds only"

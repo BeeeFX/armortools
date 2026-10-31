@@ -34,6 +34,7 @@ extern any_map_t      *data_cached_textures;
 void                   import_texture_run(char *path, bool hdr_as_envmap);
 any_array_t           *project_get_assets(void);
 void                   tab_textures_delete_texture(asset_t *asset);
+void                   bake_maps_init(void);
 
 int plugins_skinning_frame = -1;
 int plugins_split_by       = 0;
@@ -86,6 +87,9 @@ static void *import_svg(char *path) {
 
 static void *import_gltf_glb(char *path) {
 	buffer_t *b = data_get_blob(path);
+	if (b == NULL) {
+		return NULL;
+	}
 	if (plugins_skinning_frame != -1) {
 		buffer_t *blob = io_gltf_skin_blob((char *)b->buffer, b->length, path);
 		if (blob != NULL) {
@@ -100,14 +104,13 @@ static void *import_gltf_glb(char *path) {
 
 static void *import_fbx(char *path) {
 	buffer_t *b = data_get_blob(path);
+	if (b == NULL) {
+		return NULL;
+	}
 	void *res = plugins_skinning_frame == -1 ? io_fbx_parse((char *)b->buffer, b->length) : io_fbx_parse_skinned((char *)b->buffer, b->length);
 	data_delete_blob(path);
 	return res;
 }
-
-#ifdef WITH_EXTERNAL
-	void external_init();
-#endif
 
 void plugins_init() {
 	path_texture_formats(); // Init array
@@ -130,9 +133,7 @@ void plugins_init() {
 	any_map_set(import_mesh_importers, "fbx", import_fbx);
 	any_array_push(_path_mesh_formats, "fbx");
 
-#ifdef WITH_EXTERNAL
-	external_init();
-#endif
+	bake_maps_init();
 }
 
 #endif

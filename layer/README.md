@@ -1,9 +1,10 @@
 # The Singerie layer for ArmorPaint
 
 This folder makes ArmorPaint feel like Substance 3D Painter, for the artists of the collective that uses Singerie,
-**without changing any of upstream ArmorPaint's own files**. Everything here is added beside them: data files
-ArmorPaint reads (a keymap, a theme, export presets) and a small native module upstream compiles in through its
-own "external" hook. So the layer follows upstream: when ArmorPaint moves on, the layer is rebuilt on the new
+**changing almost none of upstream ArmorPaint's own files**. Everything here is added beside them: data files
+ArmorPaint reads (a keymap, a theme, export presets) and a small native module compiled in through an "external"
+hook. Upstream removed that hook on 22 October 2026; the layer's one core patch (15 lines, applied by the build in
+its copy) puts it back as it was. So the layer follows upstream: when ArmorPaint moves on, the layer is rebuilt on the new
 commit, and a smoke test says at once what broke. `../FORK.md` says the same in two paragraphs; `GAPS.md` lists what
 Painter has that ArmorPaint doesn't, and what comes next.
 
@@ -20,7 +21,7 @@ Singerie's own repository (`plugins/armorpaint`). This repository holds only cha
 | `ext/export_presets/singerie*.json` | The studio's texture export presets |
 | `native/sng_bindings.c` | The native module: the `sng_*` script functions and the layer's defaults. The only file that calls ArmorPaint's internals |
 | `native/sng_build.h` | What is being built (the build tool rewrites it in its copy) |
-| `patches/` | Core patches: none (`series` is empty; `patches/README.md` has the budget) |
+| `patches/` | Core patches: one, putting back the external hook upstream removed on 22 October 2026 (`patches/README.md` has the budget) |
 | `tools/build_windows.py` | Builds ArmorPaint with the layer on Windows |
 | `tests/smoke/` | The smoke test, its minic scripts and the script API snapshot |
 | `GAPS.md` | Painter features ArmorPaint misses, ranked, with their route; upstream pull request ideas |
@@ -34,9 +35,10 @@ python layer/tools/build_windows.py --into D:/b # elsewhere
 ```
 
 It needs Visual Studio 2022 with "Desktop development with C++" and Python 3.10+; nothing is downloaded. It never
-writes inside the repository: it copies `base/` and `paint/` to `<into>/src`, lays `layer/native/` out as
-`paint/plugins/external/` there (upstream compiles that folder in when it exists, defines `WITH_EXTERNAL` and calls
-its `external_init()` from `plugins_init()`; upstream's `.gitignore` lists the folder), runs upstream's `amake`,
+writes inside the repository: it copies `base/` and `paint/` to `<into>/src`, applies the core patches `patches/series`
+lists to that copy, lays `layer/native/` out as `paint/plugins/external/` there (with the patched hook, the project
+compiles that folder in when it exists, defines `WITH_EXTERNAL` and calls its `external_init()` from
+`plugins_init()`; upstream's `.gitignore` lists the folder), runs upstream's `amake`,
 builds Release x64 with MSBuild, then lays the app out in `<into>/armorpaint/` with the layer's data files merged
 into `data/`, the layer's licence in `data/licenses/singerie_layer.md` and `ALTERED_VERSION.txt` saying plainly that
 it is an altered ArmorPaint (zlib licence, point 2). The About box shows `<upstream>+sng.<layer>` as the commit.
@@ -45,7 +47,8 @@ Before building, it checks that the few internals the bindings declare by hand s
 
 **With clang** (Visual Studio's "C++ Clang tools for Windows"), it builds exactly as upstream does: this is how
 members' builds are made. Checked on 5 October 2026 with Visual Studio 2022's clang-cl 16.0.5 (ClangCL toolset) on
-upstream `4c06b93`: it builds without any change (about 25 s for MSBuild), and the smoke test and Singerie's
+upstream `4c06b93`: it builds without any change (about 25 s for MSBuild; on `49e9033`, 31 October, with the
+hook patch, about 35 s), and the smoke test and Singerie's
 pipeline plugin checks pass on it. `--toolset clang` insists on it; `auto` (the default) takes it when installed.
 
 **Without clang**, it switches the copy to MSVC (toolset v143) and makes three
@@ -101,7 +104,7 @@ With the build, each part in a fresh copy of its folder:
 - **the defaults**: a first start writes the Painter keymap and theme in ArmorPaint's `data/config.json`; a config
   with the member's own choice keeps it;
 - **`--api`**: all `sng_*` functions registered, and ArmorPaint's own script API (its functions, structs, enums,
-  globals and material nodes, 865 entries at the pinned commit) compared with `tests/smoke/api_snapshot.h`: an
+  globals and material nodes, 1064 entries at the pinned commit) compared with `tests/smoke/api_snapshot.h`: an
   upstream rename, removal or new parameter is listed by name;
 - **the bindings** (`tests/smoke/scripts/bindings.c`, run with `--background --script`): every `sng_*` function on
   a fresh project (a merge, a paint layer renamed, faded, blended, hidden then shown through undo and redo, a fill
@@ -250,8 +253,9 @@ worktree, runs the smoke test (new upstream API entries pass; removed or changed
 `--singerie`, Singerie's pipeline plugin test (`plugins/armorpaint/tests/run_tests.py`) on that build, then writes
 `watch-report.md` beside the build (`~/.singerie/tools/armorpaint-layer-watch`): the upstream commits since the
 pin, each step's result, the API's new entries. With `--apply`, and only when every step passed, it fast-forwards
-`main` to upstream, merges `main` into `sng/main` (no conflict is possible: the layer touches no upstream file),
-sets the pin in `upstream.toml`, writes the new `api_snapshot.h`, and commits; `--push` pushes both branches
+`main` to upstream, merges `main` into `sng/main` (no conflict is possible: the layer's files are all in `layer/`),
+sets the pin in `upstream.toml`, writes the new `api_snapshot.h`, and commits (a core patch can still stop applying to
+a new upstream commit: the build then fails, and nothing changes); `--push` pushes both branches
 (never forced). It needs `sng/main` checked out with nothing uncommitted. `--trailer "Key: value"` adds a line to
 its commits.
 
@@ -270,6 +274,24 @@ The first follow (5 October 2026): `main` fast-forwarded from `8c8e336` to `4c06
 of them script API changes); the layer built unchanged, the smoke test passed with 70 new upstream functions
 (procedural geometry, environment maps, a few maths functions) and nothing removed or changed, and Singerie's
 pipeline plugin test passed (56 checks).
+
+The second follow (31 October 2026, by hand on the branch `sng/follow-49e9033`): `4c06b93` to `49e9033` (29 October,
+315 upstream commits). The merge had no conflict (the layer's files are all in `layer/`), but the build stopped:
+upstream's `4f08044` ("paint: cleanup", 22 October) removed the `paint/plugins/external/` hook the native module
+comes in through. Resolved with the layer's first core patch, `patches/0001-restore-external-hook.patch`, which puts
+the hook back exactly as it was (15 lines in `paint/plugins/project.c` and `paint/plugins/plugins.c`), and
+`build_windows.py` now applies `patches/series` to its copy. The bindings built unchanged and their 16 hand-declared
+internals still match. The smoke test then failed only on the API snapshot: 40 new entries (sculpting tools and
+types, mesh booleans, primitive and path tools, render passes, bake maps functions, `asin`), 5 removed
+(`geom_export_write`, `render_path_draw_meshes`, `script_add_trait`, `trait_point_and_click_controller_walk_to`,
+the `obj_t` struct, now `object_desc_t`) and 16 changed (structs `config_t`, `context_t`, `project_t`, `object_t`,
+`mesh_object_t`, `slot_material_t`, `transform_t`, `camera_data_t`; three scene functions; `TOOL_TYPE_BAKE` 13 to
+24; the Blur, Curvature bake, CPU script and GPU shader nodes). None is used by the bindings or by Singerie's
+pipeline plugin (which reads `object_t`'s `name` and `children`, `context_t`'s `paint_object`, `project_t`'s
+`assets`, `mesh_object_t`'s `base`: all unchanged), so the snapshot was rewritten (1064 entries). Smoke test: all
+141 checks pass, as on the 4 October build; Singerie's pipeline plugin test: 82 checks pass on both builds; a
+project saved by the 4 October build (a fill layer with a mask in a group) opens in the new one with the same
+layers.
 
 ## Licence
 

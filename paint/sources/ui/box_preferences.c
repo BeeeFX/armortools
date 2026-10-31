@@ -19,11 +19,11 @@ void box_preferences_set_scale() {
 	f32 scale = g_config->window_scale;
 	ui_set_scale(scale);
 	ui_header_h                                    = math_floor(ui_header_default_h * scale);
-	g_config->layout->buffer[LAYOUT_SIZE_STATUS_H] = math_floor(ui_statusbar_default_h * scale);
-	ui_menubar_w                                   = math_floor(ui_menubar_default_w * scale);
+	ui_dock_set_size(DOCK_ROLE_STATUS, math_floor(ui_statusbar_default_h * scale));
+	ui_menubar_w = math_floor(ui_menubar_default_w * scale);
 	ui_base_set_icon_scale();
+	ui_dock_set_size(DOCK_ROLE_SIDEBAR, math_floor(ui_sidebar_default_w * scale));
 	base_resize();
-	g_config->layout->buffer[LAYOUT_SIZE_SIDEBAR_W] = math_floor(ui_sidebar_default_w * scale);
 }
 
 // ██╗███╗   ██╗████████╗███████╗██████╗ ███████╗ █████╗  ██████╗███████╗
@@ -35,8 +35,7 @@ void box_preferences_set_scale() {
 
 void box_preferences_interface_tab_reset_layout_menu() {
 	if (ui_menu_button(tr("Confirm"), "", ICON_CHECK)) {
-		config_init_layout();
-		config_save();
+		base_set_workspace(WORKSPACE_PRESET_VIEW_3D);
 	}
 }
 
@@ -161,6 +160,11 @@ void box_preferences_interface_tab() {
 
 	ui_check(&g_config->grid_snap, tr("Grid Snap"), "");
 	ui_nodes_grid_snap = g_config->grid_snap;
+
+	ui_check(&g_config->auto_run_scripts, tr("Auto Run Scripts"), "");
+	if (g_ui->is_hovered) {
+		ui_tooltip(tr("Run script nodes when opening a project without asking"));
+	}
 
 	ui_check(&g_config->experimental, tr("Experimental Features"), "");
 
@@ -291,7 +295,7 @@ void box_preferences_theme_tab() {
 			    },
 			    2);
 			ui_row(row);
-			ui_text("", 0, val);
+			ui_swatch(val);
 			if (g_ui->is_hovered && g_ui->input_released) {
 				_box_preferences_i = i;
 				ui_menu_draw(&box_preferences_theme_tab_theme_field_menu, -1, -1);
@@ -387,8 +391,6 @@ void box_preferences_usage_tab() {
 	    4);
 	ui_combo(&g_config->layer_res, res_combo, tr("Default Layer Resolution"), true, UI_ALIGN_LEFT, true);
 
-	ui_text_input(&g_config->server, tr("Cloud Server"), UI_ALIGN_LEFT, true, false);
-
 	ui_check(&g_config->material_live, tr("Live Material Preview"), "");
 	if (g_ui->is_hovered) {
 		ui_tooltip(tr("Instantly update material preview on node change"));
@@ -474,6 +476,18 @@ void box_preferences_camera_tab() {
 	ui_combo(&g_config->zoom_direction, zoom_direction_combo, tr("Direction to Zoom"), true, UI_ALIGN_LEFT, true);
 
 	ui_check(&g_config->camera_upside_down, tr("Allow Upside Down Camera"), "");
+
+	camera_object_t *cam     = scene_camera;
+	camera_data_t   *cam_raw = cam->data;
+
+	ui_row2();
+	ui_slider(&cam_raw->near_plane, tr("Clip Start"), 0.001, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
+	bool clip_changed = ui_item_changed();
+	ui_slider(&cam_raw->far_plane, tr("Clip End"), 50.0, 100.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
+	clip_changed |= ui_item_changed();
+	if (clip_changed) {
+		camera_object_build_proj(cam, -1.0);
+	}
 }
 
 // ██████╗ ███████╗███╗   ██╗
@@ -574,6 +588,19 @@ void box_preferences_viewport_tab() {
 		gpu_use_linear_sampling(g_config->texture_filter);
 	}
 
+	ui_row2();
+
+	ui_check(&g_context->cull_backfaces, tr("Cull Backfaces"), "");
+	if (ui_item_changed()) {
+		make_material_parse_mesh_material();
+	}
+
+	// Saved in the project
+	ui_check(&scene_camera->data->frustum_culling, tr("Frustum Culling"), "");
+	if (ui_item_changed()) {
+		g_context->ddirty = 2;
+	}
+
 	box_preferences_section(tr("Path Tracer"));
 
 	ui_row2();
@@ -622,7 +649,7 @@ void box_preferences_viewport_tab() {
 	post_changed |= ui_item_changed();
 
 	ui_row2();
-	ui_slider(&g_config->rp_vignette, tr("Vignette"), 0.0, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
+	ui_slider(&g_config->rp_vignette, tr("Vignette"), 0.0, 2.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
 	post_changed |= ui_item_changed();
 	ui_slider(&g_config->rp_grain, tr("Noise Grain"), 0.0, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
 	post_changed |= ui_item_changed();
@@ -651,20 +678,6 @@ void box_preferences_viewport_tab() {
 	}
 	if (ui_icon_button("", ICON_FOLDER_OPEN, UI_ALIGN_CENTER)) {
 		ui_files_show("cube", false, false, &box_preferences_lut_picked);
-	}
-
-	box_preferences_section(tr("Clipping"));
-
-	camera_object_t *cam     = scene_camera;
-	camera_data_t   *cam_raw = cam->data;
-
-	ui_row2();
-	ui_slider(&cam_raw->near_plane, tr("Clip Start"), 0.001, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
-	bool clip_changed = ui_item_changed();
-	ui_slider(&cam_raw->far_plane, tr("Clip End"), 50.0, 100.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
-	clip_changed |= ui_item_changed();
-	if (clip_changed) {
-		camera_object_build_proj(cam, -1.0);
 	}
 }
 
@@ -925,9 +938,7 @@ void box_preferences_plugins_tab_plugin_menu() {
 		tab_scripts_set(sys_buffer_to_string(blob));
 		data_delete_blob(string("plugins/%s", _box_preferences_f));
 		console_info(tr("Script opened"));
-		ui_base_tabs->buffer[TAB_AREA_SIDEBAR0]           = 2; // Scripts tab
-		ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
-		g_config->layout_tabs->buffer[TAB_AREA_SIDEBAR0]  = 2;
+		ui_base_show_tab(TAB_SCRIPTS);
 	}
 	if (ui_menu_button(tr("Export"), "", ICON_EXPORT)) {
 		ui_files_show("c", true, false, &box_preferences_plugins_tab_plugin_menu_export);
@@ -1034,6 +1045,51 @@ void box_preferences_plugins_tab() {
 	}
 }
 
+//  ██████╗██╗      ██████╗ ██╗   ██╗██████╗
+// ██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗
+// ██║     ██║     ██║   ██║██║   ██║██║  ██║
+// ██║     ██║     ██║   ██║██║   ██║██║  ██║
+// ╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝
+//  ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝
+
+void box_preferences_cloud_tab() {
+#ifndef IRON_WASM
+	account_init();
+	if (account_code != NULL) {
+		if (string_equals(account_code, "")) {
+			ui_text(tr("Signing in..."), UI_ALIGN_LEFT, 0x00000000);
+		}
+		else {
+			ui_text(tr("Continue in the browser."), UI_ALIGN_LEFT, 0x00000000);
+			ui_text(string_tmp("%.4s-%s", account_code, account_code + 4), UI_ALIGN_LEFT, 0x00000000);
+		}
+		ui_row2();
+		if (ui_icon_button(tr("Open Browser"), ICON_LINK, UI_ALIGN_CENTER) && !string_equals(account_code, "")) {
+			account_open_browser();
+		}
+		if (ui_icon_button(tr("Cancel"), ICON_CLOSE, UI_ALIGN_CENTER)) {
+			account_cancel();
+		}
+	}
+	else if (account_token == NULL) {
+		if (g_config->experimental) {
+			ui_text(tr("Sign in with armorpaint.org account."), UI_ALIGN_LEFT, 0x00000000);
+			if (ui_icon_button(tr("Sign In..."), ICON_CLOUD, UI_ALIGN_LEFT)) {
+				account_sign_in();
+			}
+		}
+	}
+	else {
+		ui_text(account_email != NULL ? string_tmp("%s %s", tr("Signed in as"), account_email) : tr("Signed in"), UI_ALIGN_LEFT, 0x00000000);
+		if (ui_icon_button(tr("Sign Out"), ICON_CLOSE, UI_ALIGN_LEFT)) {
+			account_sign_out();
+		}
+	}
+#endif
+
+	ui_text_input(&g_config->server, tr("Cloud Server"), UI_ALIGN_LEFT, true, false);
+}
+
 void box_preferences_show_on_hide() {
 	config_save();
 }
@@ -1072,6 +1128,9 @@ void box_preferences_show_box() {
 		box_preferences_neural_tab();
 	}
 #endif
+	if (ui_tab(&box_preferences_tab, tr("Cloud"), true, -1, false)) {
+		box_preferences_cloud_tab();
+	}
 	if (ui_tab(&box_preferences_tab, tr("Plugins"), true, -1, false)) {
 		box_preferences_plugins_tab();
 	}

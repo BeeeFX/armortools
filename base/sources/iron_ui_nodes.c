@@ -199,11 +199,9 @@ int ui_get_node_index(ui_node_t **nodes, int nodes_count, int id) {
 }
 
 int ui_next_node_id(ui_node_array_t *nodes) {
-	if (ui_node_id == -1) {
-		for (int i = 0; i < nodes->length; ++i) {
-			if (ui_node_id < nodes->buffer[i]->id) {
-				ui_node_id = nodes->buffer[i]->id;
-			}
+	for (int i = 0; i < nodes->length; ++i) {
+		if (ui_node_id < nodes->buffer[i]->id) {
+			ui_node_id = nodes->buffer[i]->id;
 		}
 	}
 	return ++ui_node_id;
@@ -636,14 +634,14 @@ void ui_node_draw_body(ui_node_t *node, ui_node_canvas_t *canvas, float nx, floa
 			draw_string(ui_tr(inp->name), nx + ui_p(12), ny - ui_p(3));
 			ui_node_socket_t *soc = inp;
 			draw_set_color(0xff000000);
-			draw_filled_rect(nx + w - ui_p(38), ny - ui_p(6), ui_p(36), ui_p(18));
+			ui_draw_rect(true, false, nx + w - ui_p(38), ny - ui_p(6), ui_p(36), ui_p(18));
 			float *val = (float *)soc->default_value->buffer;
 			draw_set_color(ui_color(val[0] * 255, val[1] * 255, val[2] * 255, 255));
 			float rx = nx + w - ui_p(37);
 			float ry = ny - ui_p(5);
 			float rw = ui_p(34);
 			float rh = ui_p(16);
-			draw_filled_rect(rx, ry, rw, rh);
+			ui_draw_rect(true, false, rx, ry, rw, rh);
 			float ix = current->input_x - wx;
 			float iy = current->input_y - wy;
 			if (current->input_started && ix > rx && iy > ry && ix < rx + rw && iy < ry + rh) {
@@ -1275,7 +1273,7 @@ void ui_node_canvas(ui_nodes_t *nodes, ui_node_canvas_t *canvas) {
 				for (int j = 0; j < paste_canvas->nodes->buffer[i]->buttons->length; ++j) {
 					ui_node_button_t *but = paste_canvas->nodes->buffer[i]->buttons->buffer[j];
 					if (but->data != NULL) {
-						char *s   = string_replace_all(but->data, "\\n", "\n");
+						char *s   = (char *)but->data;
 						but->data = u8_array_create_from_raw((uint8_t *)s, strlen(s) + 1);
 					}
 				}
@@ -1689,8 +1687,7 @@ char *ui_node_canvas_to_json(ui_node_canvas_t *canvas) {
 			json_encode_f32_array("default_value", canvas->nodes->buffer[i]->buttons->buffer[j]->default_value);
 			u8_array_t *data = canvas->nodes->buffer[i]->buttons->buffer[j]->data;
 			if (data != NULL) {
-				char *s = string_replace_all((char *)data->buffer, "\n", "\\n");
-				json_encode_string("data", s);
+				json_encode_string("data", (char *)data->buffer);
 			}
 			else {
 				json_encode_null("data");
@@ -1746,8 +1743,9 @@ ui_nodes_t *ui_nodes_create() {
 	        "GROUP_OUTPUT",
 	        "GROUP_INPUT",
 	        "brush_output_node",
+	        "MESH_OUTPUT",
 	    },
-	    4);
+	    5);
 	ui_nodes_on_custom_button = nodes_on_custom_button;
 	return raw;
 }

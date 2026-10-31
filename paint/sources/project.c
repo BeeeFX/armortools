@@ -7,10 +7,9 @@ void (*_project_import_mesh_done)(void);
 bool     _project_import_asset_hdr_as_envmap;
 bool     _project_import_swatches_replace_existing;
 asset_t *_project_reimport_texture_asset;
-scene_t *_project_scene_mesh_gc;
 
 void project_open_on_file_picked(char *path) {
-	if (!ends_with(path, ".arm")) {
+	if (!path_has_ext(path, "arm")) {
 		console_error(strings_arm_file_expected());
 		return;
 	}
@@ -37,6 +36,10 @@ void project_save_on_next_frame(void *_) {
 }
 
 void project_save(bool save_and_quit) {
+	if (agent_running) {
+		return;
+	}
+
 #ifdef IRON_WASM
 	if (!box_projects_is_cloud_path(g_project->_->filepath) && !starts_with(g_project->_->filepath, "/files/")) {
 		box_projects_cloud_save_show(save_and_quit);
@@ -85,31 +88,21 @@ void project_save_as(bool save_and_quit) {
 }
 
 void project_cleanup() {
-	if (g_context->merged_object != NULL) {
-		char *merged_handle = g_context->merged_object->data->_->handle;
-		mesh_object_remove(g_context->merged_object);
-		data_delete_mesh(merged_handle);
-		g_context->merged_object = NULL;
-	}
+	render_path_raytrace_bake_lightmap_cancel();
+	util_mesh_remove_merged();
+	nodes_mesh_reset();
+	util_path_tool_reset();
 
 	if (g_project->_->paint_objects != NULL) {
 		for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
 			mesh_object_t *p = g_project->_->paint_objects->buffer[i];
 			object_set_parent(p->base, NULL);
 		}
-		for (i32 i = 1; i < g_project->_->paint_objects->length; ++i) {
-			mesh_object_t *p = g_project->_->paint_objects->buffer[i];
-			if (p == g_context->paint_object) {
-				continue;
-			}
-			data_delete_mesh(p->data->_->handle);
-			mesh_object_remove(p);
-		}
+		util_mesh_remove_objects(g_project->_->paint_objects, g_context->paint_object);
 	}
 
 	if (g_context->paint_object != NULL) {
-		char *handle = g_context->paint_object->data->_->handle;
-		data_delete_mesh(handle);
+		util_mesh_delete_data_uncache(g_context->paint_object->data);
 	}
 
 	for (i32 i = 0; i < g_project->_->assets->length; ++i) {
@@ -144,7 +137,9 @@ void project_new(bool reset_layers) {
 		project_cleanup();
 		g_project->_->filepath = "";
 	}
-	g_project->stages = NULL;
+	g_project->stages       = NULL;
+	g_project->_->translucency = false;
+	project_scripts_trusted = true;
 
 	if (g_project->_->layers->length == 0) {
 		any_array_push(g_project->_->layers, slot_layer_create("", LAYER_SLOT_TYPE_LAYER, NULL));
@@ -156,40 +151,18 @@ void project_new(bool reset_layers) {
 	g_context->texture             = NULL;
 	g_project->mesh_assets         = any_array_create_from_raw((void *[]){}, 0);
 
-	mesh_data_t *raw        = NULL;
-	bool         no_default = project_default_mesh_list == NULL || g_context->project_type == -1;
-	char        *mesh_name  = no_default ? "cube_bevel" : project_default_mesh_list->buffer[g_context->project_type];
+	bool  no_default = project_default_mesh_list == NULL || g_context->project_type == -1;
+	char *mesh_name  = no_default ? "cube_bevel" : project_default_mesh_list->buffer[g_context->project_type];
 
-	if (string_equals(mesh_name, "sphere")) {
-		raw_mesh_t *mesh = geom_make_uv_sphere(1, 128, 64, true, 1.0);
-		mesh->name       = "Tessellated";
-		raw              = import_mesh_raw_mesh(mesh);
-	}
-	else if (string_equals(mesh_name, "sphere_2048")) {
-		raw_mesh_t *mesh = geom_make_uv_sphere(1, 4096, 2048, true, 1.0);
-		mesh->name       = "Tessellated";
-		raw              = import_mesh_raw_mesh(mesh);
-	}
-	else if (string_equals(mesh_name, "plane")) {
-		raw_mesh_t *mesh = geom_make_plane(1, 1, 2, 2, 1.0);
-		mesh->name       = "Tessellated";
-		raw              = import_mesh_raw_mesh(mesh);
-		// viewport_set_view(0, 0, 0.75, 0, 0, 0); // Top
-	}
-	else if (string_equals(mesh_name, "plane_2048")) {
-		raw_mesh_t *mesh = geom_make_plane(1, 1, 2048, 2048, 1.0);
-		mesh->name       = "Tessellated";
-		raw              = import_mesh_raw_mesh(mesh);
-		// viewport_set_view(0, 0, 0.75, 0, 0, 0); // Top
+	mesh_data_t *md = util_shape_make_data(mesh_name);
+	if (md != NULL) {
+		md->name = "Tessellated";
 	}
 	else {
-		buffer_t *b            = data_get_blob(string("meshes/%s.arm", mesh_name));
-		_project_scene_mesh_gc = armpack_decode(b);
-		raw                    = _project_scene_mesh_gc->mesh_datas->buffer[0];
+		buffer_t *b         = data_get_blob(string("meshes/%s.arm", mesh_name));
+		scene_t  *scene_raw = armpack_decode(b);
+		md                  = mesh_data_create(scene_raw->mesh_datas->buffer[0]);
 	}
-
-	mesh_data_t *md = mesh_data_create(raw);
-	any_map_set(data_cached_meshes, "SceneTessellated", md);
 
 	gpu_texture_t *current = _draw_current;
 	bool           in_use  = gpu_in_use;
@@ -198,7 +171,7 @@ void project_new(bool reset_layers) {
 
 	shader_data_t *m = data_get_shader("Scene", "Material");
 	if (g_context->paint_object == NULL) {
-		g_context->paint_object             = mesh_object_create(md, m);
+		g_context->paint_object             = scene_add_mesh_object(md, m, NULL);
 		g_context->paint_object->base->name = "paint_object";
 	}
 	else {
@@ -230,11 +203,8 @@ void project_new(bool reset_layers) {
 	ui_nodes_hwnd->redraws          = 2;
 	ui_nodes_group_stack            = any_array_create_from_raw((void *[]){}, 0);
 	g_project->_->material_groups   = any_array_create_from_raw((void *[]){}, 0);
-	g_project->_->brushes           = any_array_create_from_raw(
-        (void *[]){
-            slot_brush_create(NULL),
-        },
-        1);
+	g_project->_->brushes           = any_array_create_from_raw((void *[]){}, 0);
+	any_array_push(g_project->_->brushes, slot_brush_create(NULL));
 	g_context->brush    = g_project->_->brushes->buffer[0];
 	g_project->_->fonts = any_array_create_from_raw(
 	    (void *[]){
@@ -254,12 +224,12 @@ void project_new(bool reset_layers) {
 	make_material_parse_paint_material(true);
 	make_material_parse_brush();
 
-	g_project->_->assets                              = any_array_create_from_raw((void *[]){}, 0);
-	g_project->_->next_asset_id                       = 0;
-	g_project->packed_assets                          = any_array_create_from_raw((void *[]){}, 0);
-	g_context->ddirty                                 = 4;
-	ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
-	ui_base_hwnds->buffer[TAB_AREA_SIDEBAR1]->redraws = 2;
+	g_project->_->assets        = any_array_create_from_raw((void *[]){}, 0);
+	g_project->_->next_asset_id = 0;
+	g_project->packed_assets    = any_array_create_from_raw((void *[]){}, 0);
+	g_context->ddirty           = 4;
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
+	ui_dock_redraw(TAB_AREA_SIDEBAR1);
 
 	if (reset_layers) {
 		bool res_changed = g_project->_->layers->buffer[0]->texpaint->width != config_get_texture_res_x() ||
@@ -281,9 +251,12 @@ void project_new(bool reset_layers) {
 
 	tab_stages_init();
 	tab_meshes_reset_preview_map();
-	base_update_workflow();
+	base_update_tools();
 	project_set_default_envmap();
 	context_select_tool(TOOL_TYPE_BRUSH);
+	scene_camera->data->near_plane      = 0.01;
+	scene_camera->data->far_plane       = 100.0;
+	scene_camera->data->frustum_culling = false;
 	viewport_reset();
 	viewport_scale_to_bounds(1.8);
 	render_path_raytrace_ready = false;
@@ -296,7 +269,7 @@ void project_set_default_envmap() {
 	g_context->saved_envmap          = NULL;
 	g_context->envmap_loaded         = false;
 	scene_world->_->envmap           = g_context->empty_envmap;
-	scene_world->envmap              = "World_radiance.k";
+	scene_world->envmap              = util_render_default_envmap_name;
 	g_context->show_envmap           = false;
 	scene_world->_->radiance         = g_context->default_radiance;
 	scene_world->_->radiance_mipmaps = g_context->default_radiance_mipmaps;
@@ -308,7 +281,7 @@ void project_set_default_envmap() {
 }
 
 void project_import_material_on_file_picked(char *path) {
-	if (ends_with(path, ".json")) {
+	if (path_has_ext(path, "json")) {
 		import_json_material_run(path);
 	}
 	else {
@@ -392,48 +365,79 @@ void project_reimport_mesh() {
 	}
 }
 
-i32 project_skin_frames() {
-	i32 frames = 0;
-	for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
-		mesh_data_t *md = ((mesh_object_t *)g_project->_->paint_objects->buffer[i])->data;
-		frames          = math_max(frames, util_skin_frame_count(md->_->skin_blob));
+// culled is from the last drawn frame, path tracing and split view see beyond it
+static bool project_skin_in_view(mesh_object_t *o) {
+	return !scene_camera->data->frustum_culling || !o->culled || g_context->viewport_mode == VIEWPORT_MODE_PATH_TRACE || base_is_split();
+}
+
+bool project_reskin_object(mesh_object_t *o, i32 frame) {
+	mesh_data_t *md = o->data;
+	if (md->_->skin_blob == NULL) {
+		return false;
 	}
-	return frames;
+
+	// Each mesh loops over its own animation length
+	i32 frames     = util_skin_frame_count(md->_->skin_blob);
+	i32 mesh_frame = frames > 0 ? frame % frames : frame;
+	if (mesh_frame == md->_->skin_frame) {
+		md->_->skin_pending = false;
+		return false;
+	}
+
+	// Skip skinning culled meshes, project_reskin_pending() poses them once back in view
+	if (!project_skin_in_view(o)) {
+		md->_->skin_pending       = true;
+		md->_->skin_pending_frame = mesh_frame;
+		return false;
+	}
+	md->_->skin_pending = false;
+
+	vertex_array_t *pos = mesh_data_get_vertex_array(md, "pos");
+	vertex_array_t *nor = mesh_data_get_vertex_array(md, "nor");
+	if (!util_skin_apply(md->_->skin_blob, mesh_frame, pos->values, nor->values, &md->scale_pos)) {
+		return false;
+	}
+
+	md->_->skin_frame = mesh_frame;
+	mesh_data_build_vertices(md->_->vertex_buffer, md->vertex_arrays);
+	return true;
 }
 
 // Poses the skinned meshes at a frame
 bool project_reskin_mesh(int frame) {
 	bool any = false;
 	for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
-		mesh_object_t *o  = g_project->_->paint_objects->buffer[i];
-		mesh_data_t   *md = o->data;
-		if (md->_->skin_blob == NULL || !o->base->visible) {
-			continue;
+		mesh_object_t *o = g_project->_->paint_objects->buffer[i];
+		if (o->base->visible && project_reskin_object(o, frame)) {
+			any = true;
 		}
-
-		// Each mesh loops over its own animation length
-		i32 frames     = util_skin_frame_count(md->_->skin_blob);
-		i32 mesh_frame = frames > 0 ? frame % frames : frame;
-		if (mesh_frame == md->_->skin_frame) {
-			continue;
-		}
-
-		vertex_array_t *pos = mesh_data_get_vertex_array(md, "pos");
-		vertex_array_t *nor = mesh_data_get_vertex_array(md, "nor");
-		if (!util_skin_apply(md->_->skin_blob, mesh_frame, pos->values, nor->values, &md->scale_pos)) {
-			continue;
-		}
-
-		md->_->skin_frame = mesh_frame;
-		mesh_data_build_vertices(md->_->vertex_buffer, md->vertex_arrays);
-		any = true;
 	}
-
 	if (!any) {
 		return false;
 	}
+	project_reskin_finish();
+	return true;
+}
 
-	if (g_context->merged_object != NULL && g_config->workspace != WORKSPACE_PLAYER) {
+// Poses the meshes whose skinning was skipped while culled
+void project_reskin_pending() {
+	bool any = false;
+	for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
+		mesh_object_t *o = g_project->_->paint_objects->buffer[i];
+		if (o->data->_->skin_pending && o->base->visible && project_reskin_object(o, o->data->_->skin_pending_frame)) {
+			any = true;
+		}
+	}
+	if (any) {
+		project_reskin_finish();
+	}
+}
+
+void project_reskin_finish() {
+	if (g_context->merged_object != NULL && base_player) {
+		util_mesh_merged_stale = true;
+	}
+	else if (g_context->merged_object != NULL) {
 		if (!util_mesh_merge_refresh()) {
 			util_mesh_merge(NULL);
 		}
@@ -443,7 +447,6 @@ bool project_reskin_mesh(int frame) {
 	}
 	g_context->ddirty          = 4;
 	render_path_raytrace_ready = false;
-	return true;
 }
 
 void project_unwrap_mesh_box_draw() {
@@ -500,7 +503,7 @@ void project_reimport_textures() {
 void project_reimport_texture_load_on_next_frame(void *_) {
 	make_material_parse_paint_material(true);
 	util_render_make_material_preview();
-	ui_base_hwnds->buffer[TAB_AREA_SIDEBAR1]->redraws = 2;
+	ui_dock_redraw(TAB_AREA_SIDEBAR1);
 }
 
 void project_reimport_texture_load(char *path, asset_t *asset) {
@@ -618,7 +621,7 @@ swatch_color_t *project_make_swatch(i32 base) {
 	swatch_color_t *s = ALLOC_INIT(swatch_color_t, {.base       = base,
 	                                                .opacity    = 1.0,
 	                                                .occlusion  = 1.0,
-	                                                .roughness  = 0.0,
+	                                                .roughness  = 0.8,
 	                                                .metallic   = 0.0,
 	                                                .normal     = 0xff8080ff,
 	                                                .emission   = 0.0,

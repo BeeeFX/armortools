@@ -180,7 +180,9 @@ void *script_next_frame_fn = NULL;
 void  script_on_next_frame(void *_) {
     void *fn             = script_next_frame_fn;
     script_next_frame_fn = NULL;
-    minic_call_fn(fn, NULL, 0);
+    if (fn != NULL) {
+        minic_call_fn(fn, NULL, 0);
+    }
 }
 void script_notify_on_next_frame(void *fn) {
 	sys_notify_on_next_frame(script_on_next_frame, NULL);
@@ -191,6 +193,14 @@ bool script_is_running(void) {
 	return script_update_fn != NULL || script_next_frame_fn != NULL;
 }
 
+void script_stop(void) {
+	if (script_update_fn != NULL) {
+		sys_remove_update(script_on_update);
+		script_update_fn = NULL;
+	}
+	script_next_frame_fn = NULL;
+}
+
 void *_ui_files_done;
 void  _ui_files_show_done(char *path) {
     minic_val_t args[1] = {minic_val_ptr(path)};
@@ -199,6 +209,125 @@ void  _ui_files_show_done(char *path) {
 void ui_files_show2(char *filters, bool is_save, bool open_multiple, void *files_done) {
 	_ui_files_done = files_done;
 	ui_files_show(filters, is_save, open_multiple, _ui_files_show_done);
+}
+
+static void *_ui_box_commands;
+static void *_ui_box_on_hide;
+
+static void _ui_box_show_custom_commands(void) {
+	minic_call_fn(_ui_box_commands, NULL, 0);
+}
+
+static void _ui_box_show_custom_on_hide(void) {
+	minic_call_fn(_ui_box_on_hide, NULL, 0);
+}
+
+// Draggable window drawn by a script function, on_hide may be NULL
+void ui_box_show_custom2(void *commands, i32 mw, i32 mh, void *on_hide, char *title) {
+	_ui_box_commands = commands;
+	_ui_box_on_hide  = on_hide;
+	ui_box_show_custom(_ui_box_show_custom_commands, mw, mh, _ui_box_show_custom_on_hide, true, title);
+}
+
+static any_array_t *script_cloud_init_fns  = NULL;
+static any_array_t *script_cloud_dl_paths  = NULL;
+static any_array_t *script_cloud_dl_fns    = NULL;
+static bool         script_cloud_dl_active = false;
+static void         script_cloud_dl_next(void);
+
+static bool script_cloud_ready(void) {
+	return file_cloud != NULL && any_map_get(file_cloud, "cloud") != NULL;
+}
+
+static void script_cloud_on_init_done(void) {
+	ui_files_file_browser_on_init_cloud_done();
+}
+
+static void script_cloud_wait(void *_) {
+	if (!script_cloud_ready()) {
+		sys_notify_on_next_frame(script_cloud_wait, NULL);
+		return;
+	}
+	any_array_t *fns      = script_cloud_init_fns;
+	script_cloud_init_fns = NULL;
+	for (i32 i = 0; i < fns->length; ++i) {
+		minic_call_fn(fns->buffer[i], NULL, 0);
+	}
+	script_cloud_dl_next();
+}
+
+static void script_cloud_ensure(void *fn) {
+	if (script_cloud_init_fns == NULL) {
+		script_cloud_init_fns = any_array_create(0);
+		if (file_cloud == NULL) {
+			file_init_cloud(script_cloud_on_init_done, g_config->server);
+		}
+		sys_notify_on_next_frame(script_cloud_wait, NULL);
+	}
+	if (fn != NULL) {
+		any_array_push(script_cloud_init_fns, fn);
+	}
+}
+
+void script_cloud_init(void *done) {
+	if (script_cloud_ready()) {
+		minic_call_fn(done, NULL, 0);
+		return;
+	}
+	script_cloud_ensure(done);
+}
+
+static void script_cloud_dl_done(char *dest) {
+	void *fn = array_shift(script_cloud_dl_fns);
+	array_shift(script_cloud_dl_paths);
+	script_cloud_dl_active = false;
+	if (fn != NULL) {
+		minic_val_t args[1] = {minic_val_ptr(dest != NULL ? string_copy(dest) : NULL)};
+		minic_call_fn(fn, args, 1);
+	}
+	script_cloud_dl_next();
+}
+
+static void script_cloud_dl_next(void) {
+	if (script_cloud_dl_active || script_cloud_dl_paths == NULL || script_cloud_dl_paths->length == 0) {
+		return;
+	}
+	if (!script_cloud_ready()) {
+		script_cloud_ensure(NULL);
+		return;
+	}
+	char *path             = script_cloud_dl_paths->buffer[0];
+	script_cloud_dl_active = true;
+	if (i32_map_get(file_cloud_sizes, path) < 0) {
+		console_error(string("Cloud file not found: %s", path));
+		script_cloud_dl_done(NULL);
+		return;
+	}
+	file_cache_cloud(path, script_cloud_dl_done, g_config->server);
+}
+
+void script_cloud_download(char *path, void *done) {
+	if (script_cloud_dl_paths == NULL) {
+		script_cloud_dl_paths = any_array_create(0);
+		script_cloud_dl_fns   = any_array_create(0);
+	}
+	any_array_push(script_cloud_dl_paths, string_copy(path));
+	any_array_push(script_cloud_dl_fns, done);
+	script_cloud_dl_next();
+}
+
+static void script_cloud_reset(void) {
+	if (script_cloud_init_fns != NULL) {
+		script_cloud_init_fns->length = 0;
+	}
+	if (script_cloud_dl_paths != NULL) {
+		i32 keep                      = script_cloud_dl_active ? 1 : 0;
+		script_cloud_dl_paths->length = keep;
+		script_cloud_dl_fns->length   = keep;
+		if (keep) {
+			script_cloud_dl_fns->buffer[0] = NULL;
+		}
+	}
 }
 
 char *project_filepath_get() {
@@ -218,6 +347,9 @@ void project_filepath_set(char *s) {
 #endif
 	g_project->_->filepath = string_copy(s);
 }
+camera_object_t *script_get_camera() {
+	return scene_camera;
+}
 context_t *script_get_context() {
 	return g_context;
 }
@@ -226,6 +358,10 @@ config_t *script_get_config() {
 }
 project_t *script_get_project() {
 	return g_project;
+}
+
+world_data_t *script_get_world() {
+	return scene_world;
 }
 
 object_t *script_get_object(char *s) {
@@ -318,6 +454,9 @@ static void script_paint_begin_stroke(void) {
 	if (history_undo_layers != NULL) {
 		history_paint();
 	}
+	if (g_context->layer->texpaint_sculpt != NULL) {
+		render_path_sculpt_snapshot_gbuffer();
+	}
 
 	script_paint_active         = true;
 	script_paint_first          = true;
@@ -342,6 +481,10 @@ static void script_paint_at(f32 x, f32 y) {
 	f32 prev_x = script_paint_first ? x : g_context->paint_vec.x;
 	f32 prev_y = script_paint_first ? y : g_context->paint_vec.y;
 
+	if (script_paint_first) {
+		g_context->grab_start_x = x;
+		g_context->grab_start_y = y;
+	}
 	g_context->decal_x          = x;
 	g_context->decal_y          = y;
 	g_context->paint_vec.x      = x;
@@ -457,6 +600,543 @@ buffer_t *script_get_texture_pixels(gpu_texture_t *texture) {
 	return b;
 }
 
+bool tab_layers_can_delete(slot_layer_t *l);
+void tab_layers_delete_layer(slot_layer_t *l);
+void base_init_undo_layers();
+
+static bool script_layer_valid(slot_layer_t *l) {
+	return l != NULL && g_project != NULL && g_project->_ != NULL && array_index_of(g_project->_->layers, l) >= 0;
+}
+
+slot_layer_t *script_layer_get(char *name) {
+	if (name == NULL || g_project == NULL || g_project->_ == NULL) {
+		return NULL;
+	}
+	for (i32 i = 0; i < g_project->_->layers->length; ++i) {
+		if (string_equals(g_project->_->layers->buffer[i]->name, name)) {
+			return g_project->_->layers->buffer[i];
+		}
+	}
+	return NULL;
+}
+
+void script_layer_set(slot_layer_t *l) {
+	if (!script_layer_valid(l)) {
+		return;
+	}
+	context_set_layer(l);
+	g_context->ddirty = 2;
+}
+
+static slot_layer_t *script_layer_new_cleared(i32 base_color, f32 occlusion, f32 roughness, f32 metallic) {
+	if (g_context == NULL || g_context->layer == NULL) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t *l = layers_new_layer(false, -1, NULL);
+	if (l != NULL) {
+		history_new_layer();
+		slot_layer_clear(l, base_color, NULL, occlusion, roughness, metallic);
+	}
+	script_gpu_end(current, in_use);
+	g_context->ddirty = 2;
+	return l;
+}
+
+slot_layer_t *script_layer_new(void) {
+	return script_layer_new_cleared(0x00000000, 1.0, layers_default_rough, 0.0);
+}
+
+slot_layer_t *script_layer_new_color(i32 base_color, f32 occlusion, f32 roughness, f32 metallic) {
+	return script_layer_new_cleared(base_color, occlusion, roughness, metallic);
+}
+
+slot_layer_t *script_layer_new_fill(void) {
+	if (g_context == NULL || g_context->layer == NULL || g_context->material == NULL) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t *l = layers_new_layer(false, -1, NULL);
+	if (l != NULL) {
+		history_new_layer();
+		l->uv_type = UV_TYPE_UVMAP;
+		if (g_config->tools == TOOLS_SCULPT) {
+			sculpt_init();
+			sculpt_init_sculpt_texture(l);
+		}
+		history_to_fill_layer();
+		slot_layer_to_fill_layer(l);
+	}
+	script_gpu_end(current, in_use);
+	g_context->rtdirty = 1;
+	g_context->ddirty  = 2;
+	return l;
+}
+
+void script_layer_delete(slot_layer_t *l) {
+	if (!script_layer_valid(l) || !tab_layers_can_delete(l)) {
+		return;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	tab_layers_delete_layer(l);
+	script_gpu_end(current, in_use);
+}
+
+i32 script_layer_count(void) {
+	if (g_project == NULL || g_project->_ == NULL) {
+		return 0;
+	}
+	return g_project->_->layers->length;
+}
+
+slot_layer_t *script_layer_at(i32 i) {
+	if (i < 0 || i >= script_layer_count()) {
+		return NULL;
+	}
+	return g_project->_->layers->buffer[i];
+}
+
+i32 script_layer_index(slot_layer_t *l) {
+	if (l == NULL || g_project == NULL || g_project->_ == NULL) {
+		return -1;
+	}
+	return array_index_of(g_project->_->layers, l);
+}
+
+slot_layer_t *script_layer_new_mask(slot_layer_t *l, i32 type) {
+	// type: 0 black, 1 white, 2 fill with the current material
+	if (!script_layer_valid(l) || type < 0 || type > 2) {
+		return NULL;
+	}
+	if (type == 2 && g_context->material == NULL) {
+		return NULL;
+	}
+	if (slot_layer_is_mask(l) || slot_layer_is_filter(l)) {
+		l = l->parent;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	context_set_layer(l);
+	slot_layer_t_array_t *pointers = tab_layers_init_layer_map();
+	slot_layer_t         *m        = layers_new_mask(false, l, -1);
+	if (m != NULL) {
+		tab_layers_remap_all_layer_pointers(pointers);
+		if (type == 0) {
+			history_new_black_mask();
+			slot_layer_clear(m, 0x00000000, NULL, 1.0, layers_default_rough, 0.0);
+		}
+		else if (type == 1) {
+			history_new_white_mask();
+			slot_layer_clear(m, 0xffffffff, NULL, 1.0, layers_default_rough, 0.0);
+		}
+		else {
+			history_new_fill_mask();
+			slot_layer_clear(m, 0x00000000, NULL, 1.0, layers_default_rough, 0.0);
+			slot_layer_to_fill_layer(m);
+		}
+		layers_update_fill_layers();
+	}
+	script_gpu_end(current, in_use);
+	g_context->layers_preview_dirty = true;
+	g_context->rtdirty              = 1;
+	g_context->ddirty               = 2;
+	return m;
+}
+
+slot_layer_t *script_layer_new_group(slot_layer_t *l) {
+	if (!script_layer_valid(l)) {
+		return NULL;
+	}
+	if (slot_layer_is_mask(l) || slot_layer_is_filter(l)) {
+		l = l->parent;
+	}
+	if (slot_layer_is_group(l) || slot_layer_is_in_group(l)) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t_array_t *pointers = tab_layers_init_layer_map();
+	slot_layer_t         *group    = layers_new_group();
+	if (group != NULL) {
+		context_set_layer(l);
+		array_remove(g_project->_->layers, group);
+		array_insert(g_project->_->layers, array_index_of(g_project->_->layers, l) + 1, group);
+		l->parent = group;
+		tab_layers_remap_all_layer_pointers(pointers);
+		context_set_layer(group);
+		history_new_group();
+	}
+	script_gpu_end(current, in_use);
+	g_context->ddirty = 2;
+	return group;
+}
+
+static void script_layer_refill(slot_layer_t *l) {
+	slot_material_t *material = g_context->material;
+	g_context->material       = l->fill_material;
+	slot_layer_clear(l, 0x00000000, NULL, 1.0, layers_default_rough, 0.0);
+	layers_update_fill_layers();
+	context_set_material(material);
+}
+
+void script_layer_set_name(slot_layer_t *l, char *name) {
+	if (!script_layer_valid(l) || name == NULL || name[0] == '\0') {
+		return;
+	}
+	char *old_name = l->name;
+	l->name        = string_copy(slot_layer_unique_name(l, name));
+	tab_stages_rename_layer(old_name, l->name);
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
+}
+
+void script_layer_update(slot_layer_t *l) {
+	if (!script_layer_valid(l)) {
+		return;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	if (l->fill_material != NULL) {
+		script_layer_refill(l);
+	}
+	if (l == g_project->_->layers->buffer[0] && l->mask_opacity < 1.0) {
+		layers_enable_translucency();
+	}
+	make_material_parse_mesh_material();
+	script_gpu_end(current, in_use);
+	g_context->layers_preview_dirty = true;
+	g_context->rtdirty              = 1;
+	g_context->ddirty               = 2;
+}
+
+bool script_layer_move(slot_layer_t *l, i32 to) {
+	if (!script_layer_valid(l) || to < 0 || to >= g_project->_->layers->length) {
+		return false;
+	}
+	if (!slot_layer_can_move(l, to)) {
+		return false;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	slot_layer_move(l, to);
+	make_material_parse_mesh_material();
+	script_gpu_end(current, in_use);
+	g_context->ddirty = 2;
+	return true;
+}
+
+bool script_layer_set_group(slot_layer_t *l, slot_layer_t *group) {
+	if (!script_layer_valid(l) || !slot_layer_is_layer(l) || slot_layer_is_filter(l)) {
+		return false;
+	}
+	if (group == NULL) {
+		if (l->parent == NULL) {
+			return true;
+		}
+		return script_layer_move(l, g_project->_->layers->length - 1);
+	}
+	if (!script_layer_valid(group) || !slot_layer_is_group(group)) {
+		return false;
+	}
+	if (l->parent == group) {
+		return true;
+	}
+	// Place directly below the group and its masks, slot_layer_move then parents it to the group
+	i32 anchor = array_index_of(g_project->_->layers, group);
+	while (anchor > 0 && slot_layer_is_mask(g_project->_->layers->buffer[anchor - 1]) && g_project->_->layers->buffer[anchor - 1]->parent == group) {
+		--anchor;
+	}
+	i32  from         = array_index_of(g_project->_->layers, l);
+	i32  to           = from < anchor ? anchor - 1 : anchor;
+	bool show_panel   = group->show_panel;
+	group->show_panel = true; // A collapsed group would make the move skip past its children
+	bool moved        = script_layer_move(l, to);
+	group->show_panel = show_panel;
+	return moved && l->parent == group;
+}
+
+void script_layer_set_object(slot_layer_t *l, object_t *object) {
+	if (!script_layer_valid(l)) {
+		return;
+	}
+	if (slot_layer_is_mask(l) || slot_layer_is_filter(l)) {
+		l = l->parent;
+	}
+	i32 mask = 0;
+	if (object != NULL) {
+		for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
+			if (g_project->_->paint_objects->buffer[i]->base == object) {
+				mask = i + 1;
+				break;
+			}
+		}
+		if (mask == 0) {
+			return;
+		}
+	}
+	if (l->object_mask == mask) {
+		return;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	context_set_layer(l);
+	history_layer_object();
+	l->object_mask = mask;
+	make_material_parse_mesh_material();
+	if (l->fill_material != NULL) {
+		script_layer_refill(l);
+	}
+	else {
+		layers_set_object_mask();
+	}
+	script_gpu_end(current, in_use);
+	g_context->rtdirty = 1;
+	g_context->ddirty  = 2;
+}
+
+// Layer context menu operations
+
+static void script_layer_op_end(gpu_texture_t *current, bool in_use) {
+	make_material_parse_mesh_material();
+	script_gpu_end(current, in_use);
+	g_context->layers_preview_dirty = true;
+	g_context->rtdirty              = 1;
+	g_context->ddirty               = 2;
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
+}
+
+slot_layer_t *script_layer_duplicate(slot_layer_t *l) {
+	if (!script_layer_valid(l)) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	context_set_layer(l);
+	history_duplicate_layer();
+	layers_duplicate_layer(l);
+	script_layer_op_end(current, in_use);
+	return g_context->layer;
+}
+
+slot_layer_t *script_layer_merge_down(slot_layer_t *l) {
+	if (!script_layer_valid(l) || !tab_layers_can_merge_down(l)) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	context_set_layer(l);
+	history_merge_layers();
+	layers_merge_down();
+	if (g_context->layer->fill_material != NULL) {
+		slot_layer_to_paint_layer(g_context->layer);
+	}
+	script_layer_op_end(current, in_use);
+	return g_context->layer;
+}
+
+slot_layer_t *script_layer_merge_group(slot_layer_t *group) {
+	if (!script_layer_valid(group) || !slot_layer_is_group(group) || slot_layer_get_children(group) == NULL) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t *l = layers_merge_group(group);
+	context_set_layer(l);
+	script_layer_op_end(current, in_use);
+	return l;
+}
+
+void script_layer_clear(slot_layer_t *l) {
+	if (!script_layer_valid(l) || l->fill_material != NULL) {
+		return;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	context_set_layer(l);
+	if (slot_layer_is_group(l)) {
+		slot_layer_t_array_t *children = slot_layer_get_children(l);
+		for (i32 i = 0; children != NULL && i < children->length; ++i) {
+			slot_layer_t *c  = children->buffer[i];
+			g_context->layer = c;
+			history_clear_layer();
+			slot_layer_clear(c, 0x00000000, NULL, 1.0, layers_default_rough, 0.0);
+		}
+		g_context->layer = l;
+	}
+	else {
+		history_clear_layer();
+		slot_layer_clear(l, slot_layer_is_mask(l) ? 0xffffffff : 0x00000000, NULL, 1.0, layers_default_rough, 0.0);
+		util_layer_clear_path_points(l);
+	}
+	if (l == g_project->_->layers->buffer[0] || l == g_project->_->layers->buffer[0]->parent) {
+		layers_enable_translucency();
+	}
+	script_layer_op_end(current, in_use);
+}
+
+bool script_layer_invert_mask(slot_layer_t *m) {
+	if (!script_layer_valid(m) || !slot_layer_is_mask(m) || m->fill_material != NULL) {
+		return false;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	context_set_layer(m);
+	history_invert_mask();
+	slot_layer_invert_mask(m);
+	script_layer_op_end(current, in_use);
+	return true;
+}
+
+slot_layer_t *script_layer_apply_mask(slot_layer_t *m) {
+	if (!script_layer_valid(m) || !slot_layer_is_mask(m)) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t *parent = m->parent;
+	g_context->layer     = m;
+	history_apply_mask();
+	slot_layer_apply_mask(m);
+	context_set_layer(parent);
+	script_layer_op_end(current, in_use);
+	return parent;
+}
+
+bool script_layer_to_fill(slot_layer_t *l) {
+	// Fills with the current material
+	if (!script_layer_valid(l) || slot_layer_is_group(l) || l->fill_material != NULL || l->path_material != NULL || g_context->material == NULL) {
+		return false;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	context_set_layer(l);
+	slot_layer_is_layer(l) ? history_to_fill_layer() : history_to_fill_mask();
+	slot_layer_to_fill_layer(l);
+	script_layer_op_end(current, in_use);
+	return true;
+}
+
+bool script_layer_to_paint(slot_layer_t *l) {
+	if (!script_layer_valid(l) || slot_layer_is_group(l) || (l->fill_material == NULL && l->path_material == NULL)) {
+		return false;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	if (slot_layer_is_filter(l)) {
+		i32 pi = array_index_of(g_project->_->layers, l->parent);
+		array_remove(g_project->_->layers, l);
+		array_insert(g_project->_->layers, pi, l);
+		l->parent = NULL;
+	}
+	context_set_layer(l);
+	slot_layer_is_layer(l) ? history_to_paint_layer() : history_to_paint_mask();
+	slot_layer_to_paint_layer(l);
+	script_layer_op_end(current, in_use);
+	return true;
+}
+
+// Path, curve and text layers paint with the current material along the points added to them
+
+slot_layer_t *script_layer_new_path(bool curved) {
+	if (g_context == NULL || g_context->layer == NULL || g_context->material == NULL) {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t *l = layers_new_path_layer(curved);
+	if (l != NULL) {
+		history_new_layer();
+	}
+	script_layer_op_end(current, in_use);
+	return l;
+}
+
+slot_layer_t *script_layer_new_text(char *text) {
+	// The layer name is the painted text
+	if (g_context == NULL || g_context->layer == NULL || g_context->material == NULL || text == NULL || text[0] == '\0') {
+		return NULL;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	slot_layer_t *l = layers_new_text_layer();
+	if (l != NULL) {
+		history_new_layer();
+		script_layer_set_name(l, text);
+	}
+	script_layer_op_end(current, in_use);
+	return l;
+}
+
+bool script_layer_add_path_point(slot_layer_t *l, f32 x, f32 y) {
+	// x, y in 0..1 viewport space like script_paint(), a curve takes anchor, control, anchor, control, ...
+	if (!script_layer_valid(l) || !slot_layer_is_path(l)) {
+		return false;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	tool_type_t tool = g_context->tool;
+	if (l->path_tool != -1) {
+		g_context->tool = l->path_tool;
+	}
+	else if (tool != TOOL_TYPE_BRUSH && tool != TOOL_TYPE_ERASER && tool != TOOL_TYPE_CLONE && tool != TOOL_TYPE_BLUR && tool != TOOL_TYPE_PARTICLE) {
+		g_context->tool = TOOL_TYPE_BRUSH; // The first point picks the tool the path paints with
+	}
+	i32 count              = l->path_points->length;
+	path_layer_last_active = count / 2 - 1; // Continue from the last point
+	util_layer_add_path_point(l, x, y);
+	g_context->tool = tool;
+	script_layer_op_end(current, in_use);
+	return l->path_points->length > count;
+}
+
+void script_layer_repaint_path(slot_layer_t *l) {
+	// Repaints with the current path material, after its nodes or the path points changed
+	if (!script_layer_valid(l) || !slot_layer_is_path(l)) {
+		return;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	util_layer_repaint_path(l);
+	script_layer_op_end(current, in_use);
+}
+
 static void script_bake_lightmap_done(void *fn) {
 	if (fn != NULL) {
 		minic_call_fn(fn, NULL, 0);
@@ -470,8 +1150,30 @@ void script_bake_lightmap(object_t *o, i32 res, i32 samples, f32 range, char *pa
 	render_path_raytrace_bake_lightmap(o->ext, res, samples, range, path, script_bake_lightmap_done, done);
 }
 
+bool script_bake_lightmap_busy(void) {
+	return render_path_raytrace_bake_lightmap_busy();
+}
+
+void script_bake_lightmap_cancel(void) {
+	render_path_raytrace_bake_lightmap_cancel();
+}
+
 void script_quit(void) {
 	iron_stop();
+}
+
+void script_set_tools(i32 tools) {
+	if (tools < TOOLS_PAINT || tools > TOOLS_OBJECT || tools == g_config->tools) {
+		return;
+	}
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	base_init_undo_layers();
+	g_config->tools = tools;
+	base_update_tools();
+	script_gpu_end(current, in_use);
+	g_context->ddirty = 2;
 }
 
 void script_project_new(void) {
@@ -483,10 +1185,19 @@ void script_project_new(void) {
 	g_context->ddirty = 2;
 }
 
+static char *script_resolve_path(char *path) {
+	// iron_file_exists() checks relative paths against the cwd, data_get_blob() against data/
+	if (data_is_abs(path) || data_is_up(path) || starts_with(path, "./")) {
+		return path;
+	}
+	return string("./%s", path);
+}
+
 void script_project_open(char *path) {
 	if (path == NULL || !iron_file_exists(path)) {
 		return;
 	}
+	path = script_resolve_path(path);
 	gpu_texture_t *current;
 	bool           in_use;
 	script_gpu_begin(&current, &in_use);
@@ -495,10 +1206,21 @@ void script_project_open(char *path) {
 	g_context->ddirty = 2;
 }
 
+i32 script_asset_index(char *search) {
+	for (i32 i = g_project->_->assets->length - 1; i >= 0; --i) {
+		asset_t *a = g_project->_->assets->buffer[i];
+		if (string_index_of(a->file, search) >= 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 void script_import_asset(char *path, bool hdr_as_envmap) {
 	if (path == NULL || !iron_file_exists(path)) {
 		return;
 	}
+	path = script_resolve_path(path);
 	gpu_texture_t *current;
 	bool           in_use;
 	script_gpu_begin(&current, &in_use);
@@ -522,6 +1244,7 @@ void script_append_mesh(char *path) {
 	if (path == NULL || !iron_file_exists(path)) {
 		return;
 	}
+	path = script_resolve_path(path);
 	gpu_texture_t *current;
 	bool           in_use;
 	script_gpu_begin(&current, &in_use);
@@ -538,6 +1261,10 @@ void script_append_mesh_skinned(char *glb_path) {
 	plugins_skinning_frame = 0;
 	script_append_mesh(glb_path);
 	plugins_skinning_frame = -1;
+}
+
+buffer_t *script_load_blob(char *path) {
+	return iron_load_blob(path);
 }
 
 void script_append_mesh_obj(char *data) {
@@ -610,6 +1337,30 @@ i32 script_assets_remove(char *search) {
 	return removed;
 }
 
+i32 script_pack_assets(char *search) {
+	if (search == NULL) {
+		return 0;
+	}
+	asset_t_array_t *assets = any_array_create_from_raw((void *[]){}, 0);
+	for (i32 i = 0; i < g_project->_->assets->length; ++i) {
+		asset_t *a = g_project->_->assets->buffer[i];
+		if (string_index_of(a->file, search) >= 0 && (g_project->packed_assets == NULL || !project_packed_asset_exists(g_project->packed_assets, a->file))) {
+			any_array_push(assets, a);
+		}
+	}
+	i32 packed = assets->length;
+	if (packed > 0) {
+		gpu_texture_t *current;
+		bool           in_use;
+		script_gpu_begin(&current, &in_use);
+		export_arm_pack_assets(g_project, assets);
+		script_gpu_end(current, in_use);
+	}
+	array_free(assets);
+	free(assets);
+	return packed;
+}
+
 void script_set_pack_assets(i32 pack) {
 	g_context->pack_assets_on_save = pack != 0;
 }
@@ -621,7 +1372,7 @@ void script_export_mesh(char *path) {
 	gpu_texture_t *current;
 	bool           in_use;
 	script_gpu_begin(&current, &in_use);
-	export_mesh_run(path, NULL, true);
+	export_mesh_run(path, NULL);
 	script_gpu_end(current, in_use);
 }
 
@@ -643,7 +1394,7 @@ slot_material_t *script_material_create(char *name) {
 	shader_data_t   *data = g_project->_->materials->buffer[0]->data;
 	slot_material_t *m    = slot_material_create(data, NULL);
 	if (name != NULL && name[0] != '\0') {
-		m->canvas->name = string_copy(name);
+		m->canvas->name = string_copy(slot_material_unique_name(m->canvas, name));
 	}
 	any_array_push(g_project->_->materials, m);
 
@@ -655,9 +1406,7 @@ slot_material_t *script_material_create(char *name) {
 	script_gpu_end(current, in_use);
 
 	history_new_material();
-	if (ui_base_hwnds != NULL && ui_base_hwnds->length > 1) {
-		ui_base_hwnds->buffer[1]->redraws = 2;
-	}
+	ui_dock_redraw(1);
 	return m;
 }
 
@@ -694,7 +1443,11 @@ void script_object_set_material(object_t *o, slot_material_t *m) {
 		script_object_material_slot = m;
 		script_object_material_data = make_mesh_preview_viewport(m);
 	}
+	bool was_paintable = tab_meshes_get_linked_override(o->ext) < 0;
 	tab_meshes_set_override_data(o->ext, index, index >= 0 ? script_object_material_data : NULL);
+	if (was_paintable != (tab_meshes_get_linked_override(o->ext) < 0)) {
+		util_mesh_visibility_changed();
+	}
 	g_project->mesh_materials = i32_array_create(0);
 	g_context->ddirty         = 2;
 }
@@ -825,6 +1578,28 @@ void script_material_remove_node(ui_node_t *node) {
 	}
 }
 
+void script_material_add_input(ui_node_t *node, char *type, char *name) {
+	ui_node_canvas_t *canvas = script_material_canvas();
+	if (canvas == NULL || node == NULL || type == NULL || !string_equals(node->type, "SHADER_GPU")) {
+		return;
+	}
+	nodes_mesh_script_add_socket(canvas, node, type, name);
+	if (ui_nodes_hwnd != NULL) {
+		ui_nodes_hwnd->redraws = 2;
+	}
+}
+
+void script_material_add_output(ui_node_t *node, char *type, char *name) {
+	ui_node_canvas_t *canvas = script_material_canvas();
+	if (canvas == NULL || node == NULL || type == NULL || !string_equals(node->type, "SHADER_GPU")) {
+		return;
+	}
+	nodes_mesh_script_add_socket_to(canvas, node, type, name, true);
+	if (ui_nodes_hwnd != NULL) {
+		ui_nodes_hwnd->redraws = 2;
+	}
+}
+
 static ui_node_socket_t *script_material_socket(ui_node_t *node, bool is_input, i32 socket) {
 	if (node == NULL) {
 		return NULL;
@@ -894,6 +1669,90 @@ void script_material_set_text(ui_node_t *node, i32 button, char *text) {
 	}
 }
 
+static ui_node_canvas_t *script_mesh_canvas(mesh_object_t *o) {
+	if (o == NULL || g_project == NULL || array_index_of(g_project->_->paint_objects, o) < 0) {
+		return NULL;
+	}
+	return nodes_mesh_get(o, true)->canvas;
+}
+
+static void script_mesh_redraw(void) {
+	if (ui_nodes_hwnd != NULL) {
+		ui_nodes_hwnd->redraws = 2;
+	}
+}
+
+ui_node_t *script_mesh_create_node_at(mesh_object_t *o, char *type, f32 x, f32 y) {
+	if (type == NULL || script_mesh_canvas(o) == NULL) {
+		return NULL;
+	}
+	ui_node_t *node = nodes_mesh_create_node(o, type);
+	if (node != NULL) {
+		node->x = x;
+		node->y = y;
+	}
+	script_mesh_redraw();
+	return node;
+}
+
+ui_node_t *script_mesh_get_node(mesh_object_t *o, char *type) {
+	ui_node_canvas_t *canvas = script_mesh_canvas(o);
+	for (i32 i = 0; canvas != NULL && type != NULL && i < canvas->nodes->length; ++i) {
+		if (string_equals(canvas->nodes->buffer[i]->type, type)) {
+			return canvas->nodes->buffer[i];
+		}
+	}
+	return NULL;
+}
+
+void script_mesh_connect(mesh_object_t *o, ui_node_t *from, i32 from_socket, ui_node_t *to, i32 to_socket) {
+	ui_node_canvas_t *canvas = script_mesh_canvas(o);
+	if (canvas == NULL || from == NULL || to == NULL) {
+		return;
+	}
+	if (from_socket < 0 || from_socket >= from->outputs->length || to_socket < 0 || to_socket >= to->inputs->length) {
+		return;
+	}
+	script_material_remove_links_to(canvas, to->id, to_socket);
+	any_array_push(canvas->links, project_create_node_link(canvas->links, from->id, from_socket, to->id, to_socket));
+	script_mesh_redraw();
+}
+
+void script_mesh_disconnect(mesh_object_t *o, ui_node_t *to, i32 to_socket) {
+	ui_node_canvas_t *canvas = script_mesh_canvas(o);
+	if (canvas == NULL || to == NULL) {
+		return;
+	}
+	script_material_remove_links_to(canvas, to->id, to_socket);
+	script_mesh_redraw();
+}
+
+void script_mesh_remove_node(mesh_object_t *o, ui_node_t *node) {
+	ui_node_canvas_t *canvas = script_mesh_canvas(o);
+	if (canvas == NULL || node == NULL || string_equals(node->type, "MESH_OUTPUT")) {
+		return;
+	}
+	ui_remove_node(node, canvas);
+	script_mesh_redraw();
+}
+
+void script_mesh_add_input(mesh_object_t *o, ui_node_t *node, char *type, char *name) {
+	ui_node_canvas_t *canvas = script_mesh_canvas(o);
+	if (canvas == NULL || node == NULL || type == NULL || !string_equals(node->type, "MESH_SCRIPT")) {
+		return;
+	}
+	nodes_mesh_script_add_socket(canvas, node, type, name);
+	script_mesh_redraw();
+}
+
+void script_mesh_update(mesh_object_t *o) {
+	if (script_mesh_canvas(o) == NULL) {
+		return;
+	}
+	nodes_mesh_update(o, false);
+	script_mesh_redraw();
+}
+
 void script_material_update(void) {
 	if (g_context == NULL || g_context->material == NULL) {
 		return;
@@ -909,7 +1768,7 @@ void script_material_update(void) {
 	if (context_is_decal()) {
 		util_render_make_decal_preview();
 	}
-	base_update_workflow_nodes();
+	base_update_tools_nodes();
 
 	script_gpu_end(current, in_use);
 
@@ -919,9 +1778,7 @@ void script_material_update(void) {
 	if (ui_header_handle != NULL) {
 		ui_header_handle->redraws = 2;
 	}
-	if (ui_base_hwnds != NULL && ui_base_hwnds->length > 1) {
-		ui_base_hwnds->buffer[1]->redraws = 2;
-	}
+	ui_dock_redraw(1);
 	g_context->ddirty  = 2;
 	g_context->rtdirty = 1;
 }
@@ -951,9 +1808,7 @@ object_t *script_shape_add(char *name) {
 
 	tab_meshes_reset_preview_map();
 	g_context->ddirty = 2;
-	if (ui_base_hwnds != NULL && ui_base_hwnds->length > TAB_AREA_SIDEBAR0) {
-		ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
-	}
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
 	return mo->base;
 }
 
@@ -968,8 +1823,8 @@ object_t *script_object_duplicate(object_t *o) {
 	mesh_object_t *dup = util_mesh_duplicate_object(o->ext);
 	script_gpu_end(current, in_use);
 
-	g_context->ddirty                                 = 2;
-	ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
+	g_context->ddirty = 2;
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
 	return dup->base;
 }
 
@@ -993,9 +1848,7 @@ void script_object_remove(object_t *o) {
 
 	tab_meshes_reset_preview_map();
 	g_context->ddirty = 2;
-	if (ui_base_hwnds != NULL && ui_base_hwnds->length > TAB_AREA_SIDEBAR0) {
-		ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
-	}
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
 }
 
 void script_object_origin_to_geometry(object_t *o) {
@@ -1016,20 +1869,20 @@ void script_object_set_name(object_t *o, char *name) {
 		return;
 	}
 
-	char *new_name = string_copy(name);
-	tab_stages_rename_object(o->name, new_name);
-	o->name = new_name;
-
 	if (o->ext != NULL && string_equals(o->ext_type, "mesh_object_t")) {
 		mesh_object_t *mo = o->ext;
-		if (mo->data != NULL && util_mesh_data_owner(mo->data) == array_index_of(g_project->_->paint_objects, mo)) {
-			mo->data->name = string_copy(new_name);
+		if (array_index_of(g_project->_->paint_objects, mo) >= 0) {
+			name = util_mesh_unique_name(mo, name);
 		}
+		util_mesh_rename(mo, name);
+	}
+	else {
+		char *new_name = string_copy(name);
+		tab_stages_rename_object(o->name, new_name);
+		o->name = new_name;
 	}
 
-	if (ui_base_hwnds != NULL && ui_base_hwnds->length > TAB_AREA_SIDEBAR0) {
-		ui_base_hwnds->buffer[TAB_AREA_SIDEBAR0]->redraws = 2;
-	}
+	ui_dock_redraw(TAB_AREA_SIDEBAR0);
 }
 
 static physics_body_t *script_physics_body(object_t *o) {
@@ -1072,6 +1925,35 @@ void script_physics_sync_transform(object_t *o) {
 	physics_body_t *body = script_physics_body(o);
 	if (body != NULL) {
 		physics_body_sync_transform(body);
+	}
+}
+
+physics_body_t *script_physics_get_body(object_t *o) {
+	return script_physics_body(o);
+}
+
+vec4_t script_physics_get_pos(object_t *o) {
+	vec4_t          pos  = {0.0, 0.0, 0.0, 1.0};
+	physics_body_t *body = script_physics_body(o);
+	if (body != NULL) {
+		physics_body_get_pos(body->_body, &pos);
+	}
+	return pos;
+}
+
+vec4_t script_physics_get_velocity(object_t *o) {
+	vec4_t          vel  = {0.0, 0.0, 0.0, 0.0};
+	physics_body_t *body = script_physics_body(o);
+	if (body != NULL) {
+		physics_body_get_velocity(body->_body, &vel);
+	}
+	return vel;
+}
+
+void script_physics_set_rotation(object_t *o, quat_t rot) {
+	physics_body_t *body = script_physics_body(o);
+	if (body != NULL) {
+		physics_body_set_rotation(body, rot);
 	}
 }
 
@@ -1163,6 +2045,102 @@ object_t *script_pick_object() {
 	return hit;
 }
 
+// Where the mouse ray hits the terrain body, nan on a miss
+vec4_t script_pick_terrain() {
+	vec4_t hit = vec4_nan();
+	ray_t *ray = raycast_get_ray(mouse_view_x(), mouse_view_y(), scene_camera);
+	if (ray == NULL || !physics_terrain_raycast(ray->origin, ray->dir, &hit)) {
+		return vec4_nan();
+	}
+	return hit;
+}
+
+// Where the ray from origin along dir hits the terrain body, nan on a miss
+vec4_t script_physics_terrain_raycast(vec4_t origin, vec4_t dir) {
+	vec4_t hit = vec4_nan();
+	if (!physics_terrain_raycast(origin, dir, &hit)) {
+		return vec4_nan();
+	}
+	return hit;
+}
+
+// Where the ray from origin along dir first hits a static box body within max_dist, nan on a miss
+vec4_t script_physics_box_raycast(vec4_t origin, vec4_t dir, f32 max_dist) {
+	vec4_t hit = vec4_nan();
+	if (!physics_box_raycast(origin, dir, max_dist, &hit)) {
+		return vec4_nan();
+	}
+	return hit;
+}
+
+typedef struct script_click {
+	i32 x;
+	i32 y;
+	i32 button;
+} script_click_t;
+
+static void script_mouse_click_up(void *data) {
+	script_click_t *c = data;
+	iron_internal_mouse_trigger_release(c->button, c->x, c->y);
+	free(c);
+}
+
+static void script_mouse_click_down(void *data) {
+	script_click_t *c = data;
+	iron_internal_mouse_trigger_move(c->x, c->y);
+	ui_mouse_move(g_ui, c->x, c->y, 0, 0);
+	iron_internal_mouse_trigger_press(c->button, c->x, c->y);
+	sys_notify_on_next_frame(script_mouse_click_up, c);
+}
+
+// Press at window pixel x, y next frame and release the frame after, button 0 left, 1 right, 2 middle
+void script_mouse_click(i32 x, i32 y, i32 button) {
+	if (button < 0 || button > 4) {
+		return;
+	}
+	script_click_t *c = malloc(sizeof(script_click_t));
+	c->x              = x;
+	c->y              = y;
+	c->button         = button;
+	sys_notify_on_next_frame(script_mouse_click_down, c);
+}
+
+static void script_key_press_up(void *data) {
+	iron_internal_keyboard_trigger_key_up((i32)(intptr_t)data);
+}
+
+static void script_key_press_down(void *data) {
+	i32 code = (i32)(intptr_t)data;
+	iron_internal_keyboard_trigger_key_down(code);
+	char *name = keyboard_key_code(code);
+	if (strlen(name) == 1) {
+		iron_internal_keyboard_trigger_key_press(name[0]);
+	}
+	sys_notify_on_next_frame(script_key_press_up, data);
+}
+
+// Press key next frame and release the frame after
+void script_key_press(char *key) {
+	for (i32 code = 1; code < 256; ++code) {
+		if (string_equals(keyboard_key_code(code), key)) {
+			sys_notify_on_next_frame(script_key_press_down, (void *)(intptr_t)code);
+			return;
+		}
+	}
+}
+
+// The paint objects as mesh_object_t, the scenes meshes
+any_array_t *script_get_mesh_objects() {
+	return (any_array_t *)g_project->_->paint_objects;
+}
+
+// Scripts have no indirect calls, a function stored in a variable is called through here
+void script_call(void *fn) {
+	if (fn != NULL) {
+		minic_call_fn(fn, NULL, 0);
+	}
+}
+
 extern string_array_t *_path_texture_formats;
 extern string_array_t *_path_mesh_formats;
 extern string_array_t *_path_text_formats;
@@ -1173,7 +2151,7 @@ static any_map_t      *custom_text_importers    = NULL;
 static string_array_t *custom_text_formats      = NULL;
 
 gpu_texture_t *script_import_custom_texture(char *path) {
-	char       *format  = substring(path, string_last_index_of(path, ".") + 1, string_length(path));
+	char       *format  = path_ext(path);
 	void       *fn      = any_map_get(custom_texture_importers, format);
 	minic_val_t args[1] = {minic_val_ptr(path)};
 	minic_val_t r       = minic_call_fn(fn, args, 1);
@@ -1181,7 +2159,7 @@ gpu_texture_t *script_import_custom_texture(char *path) {
 }
 
 raw_mesh_t *script_import_custom_mesh(char *path) {
-	char       *format  = substring(path, string_last_index_of(path, ".") + 1, string_length(path));
+	char       *format  = path_ext(path);
 	void       *fn      = any_map_get(custom_mesh_importers, format);
 	minic_val_t args[1] = {minic_val_ptr(path)};
 	minic_val_t r       = minic_call_fn(fn, args, 1);
@@ -1189,7 +2167,7 @@ raw_mesh_t *script_import_custom_mesh(char *path) {
 }
 
 void script_import_custom_text(char *path) {
-	char       *format  = substring(path, string_last_index_of(path, ".") + 1, string_length(path));
+	char       *format  = path_ext(path);
 	void       *fn      = any_map_get(custom_text_importers, format);
 	minic_val_t args[1] = {minic_val_ptr(path)};
 	minic_call_fn(fn, args, 1);
@@ -1399,8 +2377,36 @@ void script_timeline_pause(void) {
 	tab_timeline_pause();
 }
 
+i32 script_timeline_get_frame(void) {
+	if (nodes_mesh_script_running) {
+		nodes_mesh_eval_reads_frame = true;
+	}
+	return tab_timeline_selected_frame;
+}
+
 void script_timeline_set_frame(i32 frame) {
 	tab_timeline_set_frame(frame);
+}
+
+void script_clip_play(object_t *o, i32 start, i32 end) {
+	if (o != NULL && o->ext_type != NULL && string_equals(o->ext_type, "mesh_object_t")) {
+		tab_timeline_clip_play(o->ext, start, end);
+	}
+}
+
+// Frames in the skinned mesh clip, 0 without one
+i32 script_clip_frame_count(object_t *o) {
+	if (o == NULL || o->ext_type == NULL || !string_equals(o->ext_type, "mesh_object_t")) {
+		return 0;
+	}
+	mesh_object_t *mo = o->ext;
+	return util_skin_frame_count(mo->data->_->skin_blob);
+}
+
+void script_clip_set_frame(object_t *o, i32 frame) {
+	if (o != NULL && o->ext_type != NULL && string_equals(o->ext_type, "mesh_object_t")) {
+		tab_timeline_clip_set_frame(o->ext, frame);
+	}
 }
 
 void script_timeline_add_keyframe(char *name, i32 frame) {
@@ -1450,5 +2456,104 @@ void script_draw_particles(gpu_texture_t *texture, float x, float y, float w, fl
 		draw_set_color(col);
 		// draw_sub_image(texture, frame_x * cell_w, frame_y * cell_w, cell_w, cell_w, p->x, p->y);
 		draw_scaled_sub_image(texture, frame_x * cell_w, frame_y * cell_w, cell_w, cell_w, p->x, p->y, cell_w * 2, cell_w * 2);
+	}
+}
+
+void script_reset_runtime(void) {
+	script_stop();
+	render_pass_remove_all();
+	tween_reset();
+	sys_remove_update(script_message_draw);
+	_script_message = NULL;
+	sys_remove_update(script_fade_draw);
+	_script_fade_stage   = NULL;
+	_script_fade_opacity = 0.0f;
+	memset(particles, 0, sizeof(particles));
+	_script_tween_transform = NULL;
+	script_cloud_reset();
+#ifdef IRON_AUDIO
+	if (data_cached_sounds != NULL) {
+		string_array_t *keys = map_keys(data_cached_sounds);
+		for (i32 i = 0; i < keys->length; ++i) {
+			audio_stop(any_map_get(data_cached_sounds, keys->buffer[i]));
+		}
+	}
+#endif
+}
+
+typedef struct script_screenshot_request {
+	char *path;
+	i32   frames;
+	void (*done)(void);
+} script_screenshot_request_t;
+
+static any_array_t   *_script_screenshot_queue  = NULL;
+static gpu_texture_t *_script_screenshot_target = NULL;
+static i32            _script_screenshot_frames = 0;
+
+static void script_screenshot_next(void);
+
+static void script_screenshot_end_frame(void *_) {
+	script_screenshot_request_t *r = _script_screenshot_queue->buffer[0];
+	gpu_framebuffer_redirect       = NULL;
+
+	draw_begin(NULL, false, 0);
+	draw_image(_script_screenshot_target, 0, 0);
+	if (agent_running) {
+		agent_draw_overlay();
+	}
+	draw_end();
+
+	buffer_t *pixels = gpu_get_texture_pixels(_script_screenshot_target);
+	for (i32 i = 3; i < pixels->length; i += 4) {
+		pixels->buffer[i] = 255;
+	}
+	iron_write_png(r->path, pixels, _script_screenshot_target->width, _script_screenshot_target->height, 0);
+	gpu_delete_texture(_script_screenshot_target);
+	_script_screenshot_target = NULL;
+
+	array_shift(_script_screenshot_queue);
+	if (r->done != NULL) {
+		r->done();
+	}
+	script_screenshot_next();
+}
+
+static void script_screenshot_capture(void *_) {
+	iron_delay_idle_sleep();
+	script_screenshot_request_t *r = _script_screenshot_queue->buffer[0];
+	if (++_script_screenshot_frames < r->frames) {
+		g_context->ddirty = 2;
+		base_redraw_ui();
+		sys_notify_on_next_frame(script_screenshot_capture, NULL);
+		return;
+	}
+	_script_screenshot_target = gpu_create_render_target(iron_window_width(), iron_window_height(), GPU_TEXTURE_FORMAT_RGBA32);
+	gpu_framebuffer_redirect  = _script_screenshot_target;
+	sys_notify_on_end_frame(script_screenshot_end_frame, NULL);
+}
+
+static void script_screenshot_next(void) {
+	if (_script_screenshot_queue->length == 0) {
+		return;
+	}
+	_script_screenshot_frames = 0;
+	sys_notify_on_next_frame(script_screenshot_capture, NULL);
+}
+
+void script_screenshot_queue(char *path, i32 frames, void (*done)(void)) {
+	if (_script_screenshot_queue == NULL) {
+		_script_screenshot_queue = any_array_create(0);
+	}
+	script_screenshot_request_t *r = ALLOC_INIT(script_screenshot_request_t, {.path = string_copy(path), .frames = frames, .done = done});
+	any_array_push(_script_screenshot_queue, r);
+	if (_script_screenshot_queue->length == 1) {
+		script_screenshot_next();
+	}
+}
+
+void script_screenshot(char *path) {
+	if (path != NULL) {
+		script_screenshot_queue(path, 1, NULL);
 	}
 }

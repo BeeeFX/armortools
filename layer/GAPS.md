@@ -5,8 +5,9 @@ The full analysis, with sources, is in Singerie's `docs/dev/research/parity-laye
 2026); this list is the working copy and changes as the layer does.
 
 Routes: **E** extension points only (data files, minic plugins, node graphs); **X** the layer's native module
-(`layer/native/`, compiled in through upstream's `paint/plugins/external/` hook, no upstream file edited); **C** a
-core patch (an upstream file edited: avoided, see `patches/README.md`). Painter facts come from Adobe's public
+(`layer/native/`, compiled in through the `paint/plugins/external/` hook; upstream removed that hook on 22 October
+2026, and the layer's one core patch puts it back); **C** a core patch (an upstream file edited: avoided, see
+`patches/README.md`). Painter facts come from Adobe's public
 documentation only.
 
 ## Done in this layer
@@ -46,6 +47,7 @@ Each is a few lines and would let the layer drop a workaround. None is opened ye
 
 | Pull request | Why |
 |---|---|
+| Put back the `paint/plugins/external/` hook (`project.c` compiles the folder in when it exists, `plugins_init()` calls `external_init()`), removed in `4f08044` "paint: cleanup" on 22 October 2026 | The layer's native module comes in through it; until then the layer carries it as its one core patch (`patches/0001-restore-external-hook.patch`, 15 lines) |
 | Declare `tab_layers_delete_layer`, `tab_layers_can_delete`, `tab_layers_can_merge_down` and `base_init_undo_layers` in `functions.h` | The bindings declare them by hand (checked by the build, but a header is safer) |
 | Script functions for the layer stack: create a paint or fill layer, a mask, a group; delete, move, duplicate, merge; opacity, blending, visibility, name | The core of `sng_layer_*`; upstream merges such binding PRs within days |
 | Script functions for history (undo, redo, the steps' names) | `sng_history_*` |

@@ -194,13 +194,13 @@ function drop_file(name) {
 	instance.exports.wasm_drop_files(ptr);
 }
 
-function net_callback_with_text(callback_id, text) {
+function net_callback_with_text(callback_id, status, text) {
 	let buffer_ptr = 0;
 	if (text !== null) {
 		buffer_ptr = instance.exports.wasm_malloc(text.length + 1);
 		write_string(buffer_ptr, text);
 	}
-	instance.exports.wasm_net_callback(callback_id, buffer_ptr);
+	instance.exports.wasm_net_callback(callback_id, status, buffer_ptr);
 }
 
 async function buffer_map_read_async(pbuffer, offset, size, pdata) {
@@ -1059,6 +1059,16 @@ async function init() {
 			        virtual_fs.delete(path);
 		        }
 			},
+			js_rename : function(from, to) {
+		        from = read_string(from);
+		        to = read_string(to);
+		        if (!virtual_fs.has(from)) {
+			        return -1;
+		        }
+		        virtual_fs.set(to, virtual_fs.get(from));
+		        virtual_fs.delete(from);
+		        return 0;
+			},
 			js_time : function() {
 		        return window.performance.now();
 			},
@@ -1199,20 +1209,32 @@ async function init() {
 		        const worker = new Worker('worker.js');
 		        worker.postMessage({wasm_module : module, memory, func_ptr, param_ptr, done_ptr});
 			},
-			js_net_request : function(purl_base, purl_path, pdata, port, method, callback_id, callbackdata, pdst_path) {
+			js_net_request : function(purl_base, purl_path, pdata, port, method, pheaders, callback_id, callbackdata, pdst_path) {
 		        let url_base = read_string(purl_base);
 		        let url_path = read_string(purl_path);
 		        let dst_path = pdst_path !== 0 ? read_string(pdst_path) : null;
 		        let url      = `https://${url_base}:${port}/${url_path}`;
-                let options = {method : 'GET', headers : {}};
+		        let options  = {method : method === 1 ? 'POST' : 'GET', headers : {}};
+		        if (pdata !== 0) {
+			        options.body = read_string(pdata);
+		        }
+		        if (pheaders !== 0) {
+			        for (let line of read_string(pheaders).split('\r\n')) {
+				        let colon = line.indexOf(':');
+				        if (colon > 0) {
+					        options.headers[line.slice(0, colon)] = line.slice(colon + 1).trim();
+				        }
+			        }
+		        }
 		        if (dst_path) {
-			        fetch(url, options).then(response => response.arrayBuffer()).then(buffer => {
+			        fetch(url, options).then(response => response.arrayBuffer().then(buffer => {
 				        virtual_fs.set(dst_path, buffer);
-				        call_wasm(instance.exports.wasm_net_callback, callback_id, 0);
-			        });
+				        call_wasm(instance.exports.wasm_net_callback, callback_id, response.status, 0);
+			        }), () => { call_wasm(instance.exports.wasm_net_callback, callback_id, 0, 0); });
 		        }
 		        else {
-			        fetch(url, options).then(response => response.text()).then(text => { call_wasm(net_callback_with_text, callback_id, text); });
+			        fetch(url, options).then(response => response.text().then(text => { call_wasm(net_callback_with_text, callback_id, response.status, text); }),
+			                                 () => { call_wasm(net_callback_with_text, callback_id, 0, null); });
 		        }
 			},
 		}
@@ -1261,6 +1283,8 @@ async function init() {
 		}
 		call_wasm(instance.exports.wasm_keyup, key_to_iron_key(event.key));
 	});
+	canvas.addEventListener('focus', () => { call_wasm(instance.exports.wasm_foreground); });
+	canvas.addEventListener('blur', () => { call_wasm(instance.exports.wasm_background); });
 
 	canvas.addEventListener('dragover', (event) => {
 		event.preventDefault();

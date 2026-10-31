@@ -8,7 +8,9 @@ What it does, in order (nothing is ever written inside this repository; every st
 
 1. notes the repository's state (`git status`), to check at the end that the build changed nothing in it;
 2. copies `base`, `paint` (without `paint/build`), `license.md`, `readme.md` and `.clang-format` into `<into>/src`;
-3. copies `layer/native/` into `<into>/src/paint/plugins/external/`: upstream compiles that folder in when it exists
+3. applies the core patches `layer/patches/series` lists to the copy (`git apply`; one today, restoring the hook
+   below, which upstream removed on 22 October 2026), then copies `layer/native/` into
+   `<into>/src/paint/plugins/external/`: with that hook, upstream's project compiles that folder in when it exists
    (`paint/plugins/project.c`, `WITH_EXTERNAL`) and calls its `external_init()` from `plugins_init()`; upstream's own
    `.gitignore` lists the folder, so it never shows up as a change to an upstream file. `sng_build.h` there is
    rewritten with the commits being built;
@@ -116,6 +118,32 @@ def copy_tree(target: Path) -> None:
     for needed in ("base", "paint"):
         if not (target / needed).is_dir():
             raise Missing(f"{REPO} has no {needed} folder: is it ArmorPaint's repository?")
+
+
+def apply_patches(src: Path, environment: dict) -> list[str]:
+    """layer/patches/series, in order, applied to the copy in `src` (never to the repository): layer/patches/README.md."""
+    names = [
+        line.strip()
+        for line in (LAYER / "patches" / "series").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    for name in names:
+        patch_file = LAYER / "patches" / name
+        if not patch_file.is_file():
+            raise Missing(f"layer/patches/series lists {name}, which isn't in layer/patches/.")
+        result = subprocess.run(
+            ["git", "apply", "--whitespace=nowarn", os.fspath(patch_file)],
+            cwd=src,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"The core patch {name} no longer applies to upstream (refresh it, or drop it if upstream took it):\n"
+                + result.stderr.strip()
+            )
+    return names
 
 
 def lay_out_native(src: Path, upstream: str, layer: str) -> None:
@@ -296,11 +324,13 @@ def build(into: Path, toolset: str) -> int:
     src = into / "src"
     copy_tree(src)
     print(f"ok   the bindings' {check_internals(src)} hand-declared internals match upstream's definitions.", flush=True)
+    environment = {**os.environ, "GIT_CEILING_DIRECTORIES": os.fspath(into)}
+    patches = apply_patches(src, environment)
+    print(f"ok   {len(patches)} core patch(es) applied to the copy: {', '.join(patches) or 'none'}.", flush=True)
     lay_out_native(src, upstream, layer)
     amake = src / "base" / "tools" / "bin" / "windows_x64" / "amake.exe"
     if not amake.is_file():
         raise Missing(f"Upstream's build tool isn't in the tree ({amake.relative_to(src)}).")
-    environment = {**os.environ, "GIT_CEILING_DIRECTORIES": os.fspath(into)}
     run_logged([os.fspath(amake)], src / "paint", logs / "amake.log", "amake (project, shaders, data)", environment)
     project = src / "paint" / "build" / "ArmorPaint.vcxproj"
     if "external" not in project.read_text(encoding="utf-8"):
