@@ -131,6 +131,11 @@ def static_checks() -> None:
         allowed = {frozenset({"node_overview", "brush_camera_align"}), frozenset({"node_search", "keymap_search"})}
         clashes = {k: v for k, v in plain.items() if len(v) > 1 and frozenset(v) not in allowed}
         check(f"keymap_presets/{path.name} gives no plain key to two viewport actions", not clashes, clashes)
+        # Keys upstream reads itself in a tab (F2 renames the layer or mesh under the mouse, F5 refreshes the browser):
+        # a preset action on one of them would fire as well (the F2 clash with the node editor, 1 November 2026).
+        taken = {key for key, actions in plain.items() if key in hard_wired_keys()}
+        check(f"keymap_presets/{path.name} leaves upstream's own keys alone ({', '.join(sorted(hard_wired_keys()))})",
+              not taken, {key: plain[key] for key in taken})
 
     # Export presets: upstream's shape, known channels, Singerie's names.
     ids = export_channel_ids()
@@ -157,6 +162,16 @@ def static_checks() -> None:
             if word not in ("srgb", "raw") or (word == "srgb") != colour or (channel in COLOUR_CHANNELS) != colour and channel != "emission_mask":
                 wrong.append(name)
         check(f"export_presets/{path.name} names say their colour space (colour srgb, data raw)", not wrong, wrong)
+
+
+def hard_wired_keys() -> set[str]:
+    """The function keys ArmorPaint's own panels read directly (`key_code == KEY_CODE_F2`, not through the keymap), as
+    keymap names ("f2")."""
+    keys = set()
+    pattern = re.compile(r"key_code\s*==\s*KEY_CODE_F(\d+)\b")
+    for path in (REPO / "paint" / "sources").rglob("*.c"):
+        keys |= {f"f{n}" for n in pattern.findall(path.read_text(encoding="utf-8", errors="replace"))}
+    return keys
 
 
 def default_keymap() -> dict[str, str]:

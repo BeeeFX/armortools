@@ -140,10 +140,13 @@ Shortcuts); nothing else of Painter is used.
 | Front, back, side, top views; orbit steps | numbers and Ctrl+numbers | **none** (the View menu) | the number keys are tools |
 | Perspective / orthographic | 5 | **F6** | F5 / F6 (F5 is ArmorPaint's player, hard-wired) |
 | Hide the interface | F11 | **Tab** | Tab |
-| 2D view, node editor | Shift+Tab, Tab | **F1, F2** | F1: the 3D/2D layout |
+| 2D view, node editor | Shift+Tab, Tab | **F1, F7** | F1: the 3D/2D layout; Painter has no node editor, and F7 is the one F key it leaves free |
+| Rename the layer or mesh under the mouse | F2 (wired in the Layers and Meshes tabs) | (same, not in the keymap) | (Painter's F2 is its 3D-only layout, which ArmorPaint lacks) |
 | Viewport display mode menu | Ctrl+M | **C** (then the mode's letter) | C cycles the channels shown |
 | Redo | Ctrl+Shift+Z | **Ctrl+Y** | Ctrl+Y |
 | Undo, save, open, new, export textures (Ctrl+Shift+E) | | (same) | the same |
+
+Keys ArmorPaint's own panels read directly (F2 renames in the Layers and Meshes tabs, F5 refreshes the browser) are never given to a keymap action: both would fire. The node editor was on F2 until 1 November 2026, when upstream's rename came; the smoke test now fails a preset that takes one of those keys.
 
 Known limits, all in ArmorPaint's input code (so not fixable from the layer without a core patch): a brush drag
 changes one value, horizontally only; a shortcut without modifiers also fires with them (which is why views can't
