@@ -22,7 +22,7 @@
 	"view_orbit_opposite": "",
 	"view_distract_free": "tab",
 	"toggle_2d_view": "f1",
-	"toggle_node_editor": "f2",
+	"toggle_node_editor": "f7",
 	"viewport_mode": "c",
 	"tool_brush": "1",
 	"tool_eraser": "2",
