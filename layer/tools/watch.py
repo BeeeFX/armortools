@@ -5,11 +5,14 @@ pass its smoke test on upstream ArmorPaint's newest `main`? When it does, follow
     python layer/tools/watch.py --singerie <repo>        # also run Singerie's pipeline plugin test on the build
     python layer/tools/watch.py --apply                  # follow upstream when everything passed
     python layer/tools/watch.py --apply --push           # and push main and sng/main to origin (BeeeFX/armortools)
+    python layer/tools/watch.py --accept-tools ...       # also when upstream changed the programs in its tree
 
 What it does:
 
 1. fetches upstream (`git fetch upstream main`) and compares its newest commit with the pin (layer/upstream.toml):
-   nothing to do when they're the same;
+   nothing to do when they're the same; lists every program or library upstream changed since the pin
+   (`base/tools/bin`, `*.exe`, `*.dll`, `*.lib`): the build runs upstream's own build tool, so when it changed, the
+   build refuses it and the watch stops there unless `--accept-tools` is given (after reading what changed);
 2. in a temporary git worktree, takes upstream's newest commit and puts this branch's `layer/` and `FORK.md` in it
    (the layer edits no upstream file, so that is exactly what merging would give);
 3. builds there (layer/tools/build_windows.py, into `--into`, by default ~/.singerie/tools/armorpaint-layer-watch);
@@ -20,8 +23,9 @@ What it does:
 6. writes a report (`<into>/watch-report.md`): the upstream commits since the pin, each step's result, the API's
    new entries;
 7. with `--apply`, and only when every step passed: fast-forwards `main` to upstream's commit, merges `main` into
-   `sng/main` (the branch must be checked out, with no uncommitted changes), sets the pin to the new commit, writes
-   the new API snapshot, and commits. `--push` then pushes `main` and `sng/main` (never forced).
+   `sng/main` (the branch must be checked out, with no uncommitted changes), sets the pin to the new commit (and the
+   build tool's hash), writes the new API snapshot, and commits. `--push` then pushes `main` and `sng/main` (never
+   forced). `--apply` is a person's step, after reading the report: the scheduled run checks only.
 
 When a step fails, nothing changes in the repository: the report says what broke (a compile error points at
 layer/native/sng_bindings.c, a static check at a data file, an API difference names the entries), to fix by hand.
@@ -32,6 +36,7 @@ step failed, 2 when it can't run. Windows only (the build). Standard library onl
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
@@ -49,6 +54,8 @@ PIN = LAYER / "upstream.toml"
 SNAPSHOT = LAYER / "tests" / "smoke" / "api_snapshot.h"
 BRANCH = "sng/main"
 OURS = ("layer", "FORK.md")  # everything the layer adds to upstream's tree
+AMAKE = "base/tools/bin/windows_x64/amake.exe"
+BINARIES = ("base/tools/bin", "*.exe", "*.dll", "*.lib")  # programs and libraries in upstream's tree
 DEFAULT_INTO = Path.home() / ".singerie" / "tools" / "armorpaint-layer-watch"
 
 
@@ -84,12 +91,19 @@ def manifest_version(tree: Path) -> str:
     return found.group(1) if found else "unknown"
 
 
-def set_pin(commit: str, day: str, version: str) -> None:
+def set_pin(commit: str, day: str, version: str, amake_sha256: str | None = None) -> None:
     text = PIN.read_text(encoding="utf-8")
     text = re.sub(r'(?m)^commit = ".*"$', f'commit = "{commit}"', text)
     text = re.sub(r'(?m)^date = ".*"$', f'date = "{day}"', text)
     text = re.sub(r'(?m)^version = ".*"$', f'version = "{version}"', text)
+    if amake_sha256:
+        text = re.sub(r'(?m)^amake_sha256 = ".*"$', f'amake_sha256 = "{amake_sha256}"', text)
     PIN.write_text(text, encoding="utf-8", newline="\n")
+
+
+def changed_binaries(pin: str, target: str) -> list[str]:
+    """The programs and libraries upstream added, changed or removed between the pin and `target`."""
+    return [line for line in git("diff", "--name-status", pin, target, "--", *BINARIES).splitlines() if line.strip()]
 
 
 def message(subject: str, body: str, trailers: list[str]) -> str:
@@ -121,6 +135,14 @@ def watch(args: argparse.Namespace) -> int:
     report += [f"Pin: `{pin[:7]}`. Upstream's main: `{target[:7]}` ({day}), {len(commits)} commits newer:", ""]
     report += [f"    {line}" for line in commits[:60]] + ([f"    ... and {len(commits) - 60} more"] if len(commits) > 60 else [])
     report.append("")
+    binaries = changed_binaries(pin, target)
+    report += ["## Programs and libraries upstream changed", ""]
+    report += [f"    {line}" for line in binaries] if binaries else ["none"]
+    report += [""] + (["Read what changed before following: the build runs upstream's build tool. "
+                       + ("Accepted with --accept-tools." if args.accept_tools else "Not run without --accept-tools."), ""]
+                      if binaries else [])
+    if binaries:
+        print(f"   upstream changed {len(binaries)} program(s) or librar(ies) since the pin: listed in the report", flush=True)
     print(f"   upstream's main is {target[:7]} ({day}), {len(commits)} commits after the pin {pin[:7]}", flush=True)
 
     tree = Path(tempfile.mkdtemp(prefix="sng-watch-"))
@@ -134,7 +156,8 @@ def watch(args: argparse.Namespace) -> int:
         version = manifest_version(tree)
 
         print("3. Building...", flush=True)
-        ok, tail = run_step([sys.executable, os.fspath(tree / "layer/tools/build_windows.py"), "--into", os.fspath(into)], tree, into / "watch-build.log")
+        build = [sys.executable, os.fspath(tree / "layer/tools/build_windows.py"), "--into", os.fspath(into)]
+        ok, tail = run_step(build + (["--accept-tools"] if args.accept_tools else []), tree, into / "watch-build.log")
         results.append(("build", ok))
         report += ["## Build", "", "passed" if ok else "**failed**:", ""] + ([] if ok else ["```", tail, "```", ""])
         app = into / "armorpaint"
@@ -166,6 +189,8 @@ def watch(args: argparse.Namespace) -> int:
         git("worktree", "prune", check=False)
 
     passed = all(ok for _, ok in results) and len(results) >= 2
+    if binaries and not args.accept_tools:
+        passed = False  # never followed without a person having read what changed in upstream's programs
     report += ["## Result", "", "Everything passed." if passed else "Failed: " + ", ".join(n for n, ok in results if not ok), ""]
     (into / "watch-report.md").write_text("\n".join(report), encoding="utf-8")
     print(f"\n{'Everything passed.' if passed else 'A step failed.'} Report: {into / 'watch-report.md'}", flush=True)
@@ -181,7 +206,8 @@ def watch(args: argparse.Namespace) -> int:
         ", with Singerie's pipeline plugin test." if args.singerie else "."
     )
     git("merge", "--no-ff", "-m", message(f"Follow upstream {target[:7]}: merge main into {BRANCH}", body, args.trailer), "main")
-    set_pin(target, day, version)
+    tool = hashlib.sha256(subprocess.run(["git", "show", f"{target}:{AMAKE}"], cwd=REPO, capture_output=True, check=True).stdout).hexdigest()
+    set_pin(target, day, version, tool)
     if snapshot_new.exists():
         shutil.copy2(snapshot_new, SNAPSHOT)
     git("add", os.fspath(PIN), os.fspath(SNAPSHOT))
@@ -200,6 +226,7 @@ def main() -> int:
     parser.add_argument("--singerie-python", help="the Python for that test (default: the repository's .venv)")
     parser.add_argument("--apply", action="store_true", help="follow upstream when everything passed")
     parser.add_argument("--push", action="store_true", help="with --apply: push main and sng/main to origin")
+    parser.add_argument("--accept-tools", action="store_true", help="build and follow even though upstream changed its programs")
     parser.add_argument("--trailer", action="append", default=[], help='a line for the commits made ("Key: value")')
     args = parser.parse_args()
     if args.push and not args.apply:

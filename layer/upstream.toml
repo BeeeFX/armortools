@@ -18,4 +18,7 @@ version = "1.1alpha"
 # changes in that copy only (layer/README.md > Building on Windows): scratch builds for tests, never for members.
 windows = "Visual Studio 2022 with C++ Clang tools (ClangCL, clang-cl 16.0.5 checked); v143 for scratch builds only"
 amake = "base/tools/bin/windows_x64/amake.exe (upstream's own, at the pinned commit)"
+# The build runs that program: build_windows.py refuses one with another hash unless --accept-tools is given, after a
+# person read what changed upstream (watch.py lists the binaries a follow would bring). watch.py --apply writes it.
+amake_sha256 = "b2f1ac959c7e55a0e055260d6f9b1f427e03b0dde9518008f2a9d4f62fdadcd2"
 python = "3.11 or newer, standard library only (build, smoke test, watch, packaging)"

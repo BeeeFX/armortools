@@ -3,6 +3,7 @@
     python layer/tools/build_windows.py                    # into ~/.singerie/tools/armorpaint-layer-build
     python layer/tools/build_windows.py --into D:\\build    # elsewhere
     python layer/tools/build_windows.py --toolset msvc     # force the scratch MSVC route (tests only)
+    python layer/tools/build_windows.py --accept-tools     # run a build tool upstream.toml doesn't pin (read first)
 
 What it does, in order (nothing is ever written inside this repository; every step works in `<into>/src`):
 
@@ -11,11 +12,12 @@ What it does, in order (nothing is ever written inside this repository; every st
 3. applies the core patches `layer/patches/series` lists to the copy (`git apply`; one today, restoring the hook
    below, which upstream removed on 22 October 2026), then copies `layer/native/` into
    `<into>/src/paint/plugins/external/`: with that hook, upstream's project compiles that folder in when it exists
-   (`paint/plugins/project.c`, `WITH_EXTERNAL`) and calls its `external_init()` from `plugins_init()`; upstream's own
-   `.gitignore` lists the folder, so it never shows up as a change to an upstream file. `sng_build.h` there is
-   rewritten with the commits being built;
+   (`paint/plugins/project.c`, `WITH_EXTERNAL`) and calls its `external_init()` from `plugins_init()`; the folder
+   exists only in that copy, never in the repository. `sng_build.h` there is rewritten with the commits being built;
 4. runs upstream's build tool there (`base/tools/bin/windows_x64/amake.exe`, without `--compile`): the Visual Studio
-   project, the shaders and `build/out/data`;
+   project, the shaders and `build/out/data`. Only the program whose SHA-256 `upstream.toml` pins (`amake_sha256`):
+   another one (upstream changed it) stops the build until a person has read what changed and passes
+   `--accept-tools`;
 5. picks the toolset: Visual Studio's ClangCL when it is installed (what upstream and members' builds use); otherwise
    the copy is switched to MSVC (v143) after three mechanical syntax changes MSVC needs, which change nothing
    ArmorPaint does (C23 empty initializers `(void *[]){}` -> `(void *[]){0}`; compound literals initializing
@@ -25,17 +27,19 @@ What it does, in order (nothing is ever written inside this repository; every st
    with MSBuild from Visual Studio's `vcvars64.bat` (found with vswhere);
 7. lays the app out in `<into>/armorpaint/`: `ArmorPaint.exe`, `data/`, upstream's `readme.txt` and `license.md`, the
    layer's data files from `layer/ext/` merged into `data/` (keymap and theme presets, export presets, plugins), the
-   layer's licence in `data/licenses/`, and `ALTERED_VERSION.txt` saying plainly that this is an altered ArmorPaint
-   (zlib licence, point 2);
+   layer's licence in `data/licenses/`, `ALTERED_VERSION.txt` saying plainly that this is an altered ArmorPaint
+   (zlib licence, point 2) and where to report its problems, and `sng_files.json`, every file laid out with its
+   SHA-256: `package_windows.py` packs only those, unchanged, so nothing a test run left in the folder reaches members;
 8. checks the repository's state again: any difference fails the build.
 
 Nothing is downloaded: a missing tool stops the build with what's missing. Logs go to `<into>/logs/`. Windows only.
-Standard library only (Python 3.10+).
+Standard library only (Python 3.11+).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -66,6 +70,8 @@ VARIABLE_LENGTH_ARRAYS = {
 
 # layer/ext/<folder> -> data/<folder> in the laid-out app.
 EXT_FOLDERS = ("keymap_presets", "themes", "export_presets", "plugins")
+AMAKE = Path("base") / "tools" / "bin" / "windows_x64" / "amake.exe"
+FILES_LIST = "sng_files.json"  # in the app folder: every file laid out, with its SHA-256 (package_windows.py)
 
 ALTERED_NOTE = """This is Singepaint, an altered version of ArmorPaint (https://github.com/armory3d/armorpaint), based on
 ArmorPaint. Its title bar says "Singepaint (based on ArmorPaint)", and its About box shows the commit as
@@ -75,6 +81,9 @@ It is ArmorPaint at upstream commit {upstream} with the Singerie layer (commit {
 shortcuts and theme, studio export presets and the sng_* script functions (FORK.md and layer/README.md in the
 layer's repository). ArmorPaint is zlib-licensed (license.md, kept here); the layer's own files are zlib-licensed
 too (data/licenses/singerie_layer.md).
+
+Problems with this build: tell the collective (Singerie > Support), not ArmorPaint's author: they may come from what
+the layer adds.
 
 Built {built} with {toolset}.{scratch}
 """
@@ -97,10 +106,36 @@ def git(*args: str) -> str:
 
 
 def read_pin() -> dict[str, str]:
+    return read_toml()["upstream"]
+
+
+def read_toml() -> dict:
     import tomllib
 
     with open(LAYER / "upstream.toml", "rb") as file:
-        return tomllib.load(file)["upstream"]
+        return tomllib.load(file)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def check_amake(amake: Path, accept_tools: bool) -> str:
+    """The build tool's SHA-256, refused when it isn't the one upstream.toml pins (upstream's tree carries the program
+    the build runs; a changed one is read about before it runs on this PC): RuntimeError naming --accept-tools."""
+    actual = sha256(amake)
+    pinned = read_toml().get("toolchain", {}).get("amake_sha256", "")
+    if actual != pinned and not accept_tools:
+        raise RuntimeError(
+            f"The build tool {AMAKE.as_posix()} isn't the one layer/upstream.toml pins (its SHA-256 is {actual}, "
+            f"the pin {pinned or 'missing'}). Upstream changed it: read what changed (layer/tools/watch.py lists it), "
+            "then build again with --accept-tools."
+        )
+    return actual
 
 
 def copy_tree(target: Path) -> None:
@@ -300,10 +335,23 @@ def lay_out_app(src: Path, app: Path, note: str) -> list[str]:
     (app / "data" / "licenses").mkdir(parents=True, exist_ok=True)
     shutil.copy2(LAYER / "LICENSE.md", app / "data" / "licenses" / "singerie_layer.md")
     (app / "ALTERED_VERSION.txt").write_text(note, encoding="utf-8")
+    write_files_list(app)
     return added
 
 
-def build(into: Path, toolset: str) -> int:
+def write_files_list(app: Path) -> int:
+    """`sng_files.json` in the app folder: every file laid out (relative path, forward slashes) and its SHA-256, the
+    list package_windows.py packs from. Returns how many."""
+    files = {
+        path.relative_to(app).as_posix(): sha256(path)
+        for path in sorted(app.rglob("*"))
+        if path.is_file() and path.name != FILES_LIST
+    }
+    (app / FILES_LIST).write_text(json.dumps({"files": files}, indent=1) + "\n", encoding="utf-8", newline="\n")
+    return len(files)
+
+
+def build(into: Path, toolset: str, accept_tools: bool = False) -> int:
     into.mkdir(parents=True, exist_ok=True)
     logs = into / "logs"
     logs.mkdir(exist_ok=True)
@@ -328,9 +376,13 @@ def build(into: Path, toolset: str) -> int:
     patches = apply_patches(src, environment)
     print(f"ok   {len(patches)} core patch(es) applied to the copy: {', '.join(patches) or 'none'}.", flush=True)
     lay_out_native(src, upstream, layer)
-    amake = src / "base" / "tools" / "bin" / "windows_x64" / "amake.exe"
+    amake = src / AMAKE
     if not amake.is_file():
         raise Missing(f"Upstream's build tool isn't in the tree ({amake.relative_to(src)}).")
+    tool = check_amake(amake, accept_tools)
+    pinned = read_toml().get("toolchain", {}).get("amake_sha256", "")
+    print(("ok   the build tool is the one upstream.toml pins." if tool == pinned else
+           f"Note: running a build tool upstream.toml doesn't pin (--accept-tools): SHA-256 {tool}."), flush=True)
     run_logged([os.fspath(amake)], src / "paint", logs / "amake.log", "amake (project, shaders, data)", environment)
     project = src / "paint" / "build" / "ArmorPaint.vcxproj"
     if "external" not in project.read_text(encoding="utf-8"):
@@ -365,13 +417,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--into", default=os.fspath(DEFAULT_INTO), help="where to build (default %(default)s)")
     parser.add_argument("--toolset", choices=("auto", "clang", "msvc"), default="auto", help="default: clang when installed")
+    parser.add_argument("--accept-tools", action="store_true", help="run a build tool upstream.toml doesn't pin (read first)")
     args = parser.parse_args()
     into = Path(args.into).resolve()
     if into == REPO or REPO in into.parents:
         print("Build outside the repository: the build never writes in it.")
         return 2
     try:
-        return build(into, args.toolset)
+        return build(into, args.toolset, args.accept_tools)
     except Missing as exc:
         print(f"Missing: {exc}")
         return 3
