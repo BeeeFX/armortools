@@ -5,7 +5,7 @@ Subject: [PATCH] paint: restore the external plugin hook
 
 What: compile paint/plugins/external/ in when it exists and call its external_init() from plugins_init(), as upstream did until 4f08044
 Size: 15 lines in paint/plugins/project.c, paint/plugins/plugins.c
-Upstream: local, because upstream removed the hook on 22 October 2026 (4f08044 "paint: cleanup"); offering it back upstream is the admin's call
+Upstream: local, because upstream removed the hook on 22 October 2026 (4f08044 "paint: cleanup"); offered back in https://github.com/armory3d/armorpaint/issues/2185 (12 November 2026)
 Gap: every item (the layer's native module, layer/native/, is compiled in through this hook)
 ---
  paint/plugins/plugins.c | 8 ++++++++

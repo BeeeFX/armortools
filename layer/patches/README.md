@@ -13,7 +13,7 @@ patch header's `Upstream:` line. If upstream takes it back, delete the file and 
 
 ## Offering the hook back
 
-The issue, ready to post on https://github.com/armory3d/armortools/issues (by Baptiste, from the collective's account):
+The issue, posted by Baptiste on 12 November 2026: https://github.com/armory3d/armorpaint/issues/2185
 
 > **Title:** Could the `paint/plugins/external` hook come back?
 >
