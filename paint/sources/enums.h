@@ -98,10 +98,13 @@ typedef enum {
 } tools_t;
 
 typedef enum {
-	RENDER_MODE_DEFERRED   = 0,
-	RENDER_MODE_FORWARD    = 1,
-	RENDER_MODE_PATH_TRACE = 2,
-} render_mode_t;
+	PLATFORM_WINDOWS = 0,
+	PLATFORM_LINUX   = 1,
+	PLATFORM_MACOS   = 2,
+	PLATFORM_IOS     = 3,
+	PLATFORM_ANDROID = 4,
+	PLATFORM_WASM    = 5,
+} platform_t;
 
 typedef enum {
 	EXPORT_MODE_VISIBLE       = 0,
@@ -289,6 +292,12 @@ typedef enum {
 	BLUR_TYPE_BLUR   = 0,
 	BLUR_TYPE_SMUDGE = 1,
 } blur_type_t;
+
+typedef enum {
+	SELECT_MODE_RECTANGLE = 0,
+	SELECT_MODE_ELLIPSE   = 1,
+	SELECT_MODE_POLYGON   = 2,
+} select_mode_t;
 
 typedef enum {
 	CLONE_LAYERS_SELECTED = 0,
@@ -534,6 +543,11 @@ typedef enum {
 	ICON_SCULPT_PLATEAU   = 155,
 	ICON_RESERVED5        = 156, // icon18 strip at the bottom edge
 } icon_t;
+
+typedef enum {
+	SWATCH_DISPLAY_2D,
+	SWATCH_DISPLAY_3D,
+} swatch_display_t;
 
 typedef enum {
 	COLOR_SPACE_AUTO, // sRGB for base color, otherwise linear

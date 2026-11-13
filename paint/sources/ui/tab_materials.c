@@ -225,7 +225,8 @@ void tab_materials_draw_slots_menu() {
 }
 
 void tab_materials_draw_slots(bool mini) {
-	i32 slotw = math_floor(51 * UI_SCALE() + g_config->window_scale * 2);
+	f32 a     = mini ? 1.0 : ui_base_asset_scale();
+	i32 slotw = math_floor((50 * a + 1) * UI_SCALE() + g_config->window_scale * 2);
 	i32 num   = math_floor(g_ui->_window_w / (float)slotw);
 	if (num == 0) {
 		return;
@@ -234,7 +235,7 @@ void tab_materials_draw_slots(bool mini) {
 	bool drag_pos_set = false;
 	f32  uix          = 0.0;
 	f32  uiy          = 0.0;
-	i32  imgw_val     = math_floor(50 * UI_SCALE());
+	i32  imgw_val     = math_floor(50 * a * UI_SCALE());
 
 	for (i32 row = 0; row < math_floor(math_ceil(g_project->_->materials->length / (float)num)); ++row) {
 		i32          mult = g_config->show_asset_names ? 2 : 1;
@@ -244,14 +245,14 @@ void tab_materials_draw_slots(bool mini) {
 		}
 		ui_row(ar);
 
-		g_ui->_x += 2;
-		f32 off = g_config->show_asset_names ? UI_ELEMENT_OFFSET() * 10.0 : 6;
+		g_ui->_x += mini ? 2 : 2 * UI_SCALE();
+		f32 off = g_config->show_asset_names ? UI_ELEMENT_OFFSET() * 10.0 + (a - 1) * 50 * UI_SCALE() : 6;
 		if (row > 0) {
 			g_ui->_y += off;
 		}
 
 		for (i32 j = 0; j < num; ++j) {
-			i32 imgw = math_floor(50 * UI_SCALE());
+			i32 imgw = math_floor(50 * a * UI_SCALE());
 			i32 i    = j + row * num;
 			if (i >= g_project->_->materials->length) {
 				ui_end_element_of_size(imgw);
@@ -270,8 +271,8 @@ void tab_materials_draw_slots(bool mini) {
 					ui_rect_round(0, -2, w - 2, w - 4, g_theme->HIGHLIGHT_COL, 3);
 				}
 				else {
-					i32 w = 50 + math_floor(g_config->window_scale * 2);
-					ui_rect_round(0, -1, w + 2, w + 2, g_theme->HIGHLIGHT_COL, 2 * UI_SCALE());
+					i32 w = 50 * a;
+					ui_rect_round(-1, -1, w + 2, w + 2, g_theme->HIGHLIGHT_COL, 2 * UI_SCALE());
 				}
 			}
 
@@ -279,15 +280,17 @@ void tab_materials_draw_slots(bool mini) {
 			uix      = g_ui->_x;
 			uiy      = g_ui->_y;
 			i32 tile = UI_SCALE() > 1 ? 100 : 50;
-			f32 imgh = mini ? ui_sidebar_default_w_mini * 0.85 * UI_SCALE() : 50 * UI_SCALE();
+			f32 imgh = mini ? ui_sidebar_w_mini * 0.85 : 50 * a * UI_SCALE();
 
 			if (base_drag_material != NULL && tab_materials_drag_pos == i) {
 				ui_fill(-1, -2, 2, imgw_val + 4, g_theme->HIGHLIGHT_COL);
 			}
 
-			ui_state_t state = g_project->_->materials->buffer[i]->preview_ready
-			                       ? ui_image(img, 0xffffffff, imgh)
-			                       : ui_sub_image(resource_get("icons.k"), 0xffffffff, -1.0, tile, tile, tile, tile);
+			g_ui->image_scroll_align = mini;
+			ui_state_t state         = g_project->_->materials->buffer[i]->preview_ready
+			                               ? ui_image(img, 0xffffffff, imgh)
+			                               : ui_sub_image(resource_get("icons.k"), 0xffffffff, imgh, tile, tile, tile, tile);
+			g_ui->image_scroll_align = true;
 
 			if (state == UI_STATE_HOVERED && base_drag_material != NULL) {
 				tab_materials_drag_pos = (mouse_x > uix + g_ui->_window_x + imgw_val / 2.0) ? i + 1 : i;
@@ -346,9 +349,8 @@ void tab_materials_draw_slots(bool mini) {
 				}
 			}
 			if (g_config->show_asset_names) {
-				g_ui->_x = uix;
-				g_ui->_y += slotw * 0.9;
-				ui_text(g_project->_->materials->buffer[i]->canvas->name, UI_ALIGN_CENTER, 0x00000000);
+				g_ui->_y += slotw * 0.9 + (a - 1) * 5 * UI_SCALE();
+				ui_base_asset_name(g_project->_->materials->buffer[i]->canvas->name, uix, imgh);
 				if (g_ui->is_hovered) {
 					if (i < 9) {
 						i32 i1 = i + 1;
@@ -359,7 +361,7 @@ void tab_materials_draw_slots(bool mini) {
 						ui_tooltip(g_project->_->materials->buffer[i]->canvas->name);
 					}
 				}
-				g_ui->_y -= slotw * 0.9;
+				g_ui->_y -= slotw * 0.9 + (a - 1) * 5 * UI_SCALE();
 				if (i == g_project->_->materials->length - 1) {
 					g_ui->_y += j == num - 1 ? imgw : imgw + UI_ELEMENT_H() + UI_ELEMENT_OFFSET();
 				}
@@ -487,15 +489,15 @@ void tab_materials_apply_picked_color(swatch_color_t *swatch) {
 	if (canvas->nodes->length != 1 || !string_equals(canvas->nodes->buffer[0]->type, "OUTPUT_MATERIAL_PBR")) {
 		return;
 	}
-	ui_node_t *node                                   = canvas->nodes->buffer[0];
-	node->inputs->buffer[0]->default_value            = f32_array_create_xyzw(color_get_rb(swatch->base) / 255.0, color_get_gb(swatch->base) / 255.0,
-	                                                                          color_get_bb(swatch->base) / 255.0, 1.0);
+	ui_node_t *node = canvas->nodes->buffer[0];
+	node->inputs->buffer[0]->default_value =
+	    f32_array_create_xyzw(color_get_rb(swatch->base) / 255.0, color_get_gb(swatch->base) / 255.0, color_get_bb(swatch->base) / 255.0, 1.0);
 	node->inputs->buffer[1]->default_value->buffer[0] = swatch->opacity;
 	node->inputs->buffer[2]->default_value->buffer[0] = swatch->occlusion;
 	node->inputs->buffer[3]->default_value->buffer[0] = swatch->roughness;
 	node->inputs->buffer[4]->default_value->buffer[0] = swatch->metallic;
-	node->inputs->buffer[5]->default_value            = f32_array_create_xyz(color_get_rb(swatch->normal) / 255.0, color_get_gb(swatch->normal) / 255.0,
-	                                                                         color_get_bb(swatch->normal) / 255.0);
+	node->inputs->buffer[5]->default_value =
+	    f32_array_create_xyz(color_get_rb(swatch->normal) / 255.0, color_get_gb(swatch->normal) / 255.0, color_get_bb(swatch->normal) / 255.0);
 	node->inputs->buffer[7]->default_value->buffer[0] = swatch->height;
 	tab_materials_update_material();
 	if (layers_is_fill_material()) {

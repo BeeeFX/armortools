@@ -18,11 +18,11 @@ char            *box_preferences_new_plugin     = "new_plugin";
 void box_preferences_set_scale() {
 	f32 scale = g_config->window_scale;
 	ui_set_scale(scale);
-	ui_header_h                                    = math_floor(ui_header_default_h * scale);
+	ui_header_h = math_floor(ui_header_default_h * scale);
 	ui_dock_set_size(DOCK_ROLE_STATUS, math_floor(ui_statusbar_default_h * scale));
 	ui_menubar_w = math_floor(ui_menubar_default_w * scale);
 	ui_base_set_icon_scale();
-	ui_dock_set_size(DOCK_ROLE_SIDEBAR, math_floor(ui_sidebar_default_w * scale));
+	ui_dock_set_size(DOCK_ROLE_SIDEBAR, math_floor(ui_base_sidebar_default_w(g_config->large_asset_previews) * scale));
 	base_resize();
 }
 
@@ -49,8 +49,10 @@ void box_preferences_interface_tab_restore_menu_import_on_next_frame(config_t *r
 
 void box_preferences_interface_tab_restore_menu_import(char *path) {
 	buffer_t *b   = data_get_blob(path);
-	config_t *raw = json_parse(sys_buffer_to_string(b));
-	sys_notify_on_next_frame(&box_preferences_interface_tab_restore_menu_import_on_next_frame, raw);
+	config_t *raw = config_from_json(sys_buffer_to_string(b));
+	if (raw != NULL) {
+		sys_notify_on_next_frame(&box_preferences_interface_tab_restore_menu_import_on_next_frame, raw);
+	}
 }
 
 void box_preferences_interface_tab_restore_menu_confirm(void *_) {
@@ -113,6 +115,33 @@ void box_preferences_interface_tab() {
 	}
 	if (scale_changed) {
 		g_context->hscale_was_changed = true;
+	}
+
+	ui_check(&g_config->large_asset_previews, tr("Large Asset Previews"), "");
+	if (ui_item_changed()) {
+		sys_notify_on_next_frame(&util_render_resize_asset_icons, NULL);
+		f32  scale = g_config->window_scale;
+		bool large = g_config->large_asset_previews;
+		i32  size  = math_floor(ui_dock_get_size(DOCK_ROLE_SIDEBAR));
+		i32  new_w = 0;
+		if (size == math_floor(ui_base_sidebar_mini_w(!large) * scale)) {
+			new_w = ui_base_sidebar_mini_w(large);
+		}
+		else if (size == math_floor(ui_base_sidebar_full_w(!large) * scale)) {
+			new_w = ui_base_sidebar_full_w(large);
+		}
+		if (new_w > 0) {
+			ui_dock_set_size(DOCK_ROLE_SIDEBAR, math_floor(new_w * scale));
+			base_resize();
+			ui_dock_save();
+		}
+		base_redraw_ui();
+	}
+
+	ui_check(&g_config->tooltips, tr("Tooltips"), "");
+	if (ui_item_changed()) {
+		ui_tooltips = g_config->tooltips;
+		base_redraw_ui();
 	}
 
 	ui_check(&g_config->node_previews, tr("Node Previews"), "");
@@ -431,6 +460,14 @@ void box_preferences_usage_tab() {
 	if (ui_item_changed()) {
 		make_material_parse_paint_material(true);
 	}
+
+	ui_check(&g_config->pixel_snap, tr("Pixel Snap"), "");
+	if (ui_item_changed()) {
+		make_material_parse_paint_material(true);
+	}
+	if (g_ui->is_hovered) {
+		ui_tooltip(tr("Snap painting to texture pixels, a radius of 0.01 paints 1 pixel"));
+	}
 }
 
 //  ██████╗ █████╗ ███╗   ███╗███████╗██████╗  █████╗
@@ -547,21 +584,8 @@ static void box_preferences_section(char *title) {
 void box_preferences_viewport_tab() {
 	box_preferences_section(tr("Display"));
 
-	ui_row2();
-
 	string_array_t *mode_combo = base_get_viewport_modes();
 	ui_combo(&g_config->viewport_mode, mode_combo, tr("Default Mode"), true, UI_ALIGN_LEFT, true);
-
-	string_array_t *render_mode_combo = any_array_create_from_raw_tmp(
-	    (void *[]){
-	        tr("Desktop"),
-	        tr("Mobile"),
-	    },
-	    2);
-	ui_combo((int *)&g_config->render_mode, render_mode_combo, tr("Renderer"), true, UI_ALIGN_LEFT, true);
-	if (ui_item_changed()) {
-		context_set_render_path();
-	}
 
 	ui_row2();
 
@@ -634,13 +658,11 @@ void box_preferences_viewport_tab() {
 
 	bool post_changed = false;
 
-	if (g_config->render_mode == RENDER_MODE_DEFERRED) {
-		ui_row2();
-		ui_slider(&g_config->rp_ssao, tr("SSAO"), 0.0, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
-		post_changed |= ui_item_changed();
-		ui_slider(&g_config->rp_bloom, tr("Bloom"), 0.0, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
-		post_changed |= ui_item_changed();
-	}
+	ui_row2();
+	ui_slider(&g_config->rp_ssao, tr("SSAO"), 0.0, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
+	post_changed |= ui_item_changed();
+	ui_slider(&g_config->rp_bloom, tr("Bloom"), 0.0, 1.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
+	post_changed |= ui_item_changed();
 
 	ui_row2();
 	ui_slider(&g_config->rp_contrast, tr("Contrast"), 0.0, 2.0, true, 100.0, true, UI_ALIGN_RIGHT, true);
@@ -793,6 +815,16 @@ void box_preferences_model_panel(neural_node_model_t *m) {
 }
 
 void box_preferences_neural_tab() {
+	string_array_t *console_model_combo = any_array_create_from_raw_tmp(
+	    (void *[]){
+	        "Qwen",
+	        "Claude",
+	        "Grok",
+	        "Codex",
+	    },
+	    4);
+	ui_combo(&g_config->console_model, console_model_combo, tr("Console Model"), true, UI_ALIGN_LEFT, true);
+
 	i32             neural_res       = g_config->neural_res == 2048 ? 2 : (g_config->neural_res == 1024 ? 1 : 0);
 	string_array_t *neural_res_combo = any_array_create_from_raw_tmp(
 	    (void *[]){
@@ -804,16 +836,6 @@ void box_preferences_neural_tab() {
 	ui_set_next_id((ui_id_t)&g_config->neural_res);
 	ui_combo(&neural_res, neural_res_combo, tr("Resolution"), true, UI_ALIGN_LEFT, true);
 	g_config->neural_res = neural_res == 2 ? 2048 : (neural_res == 1 ? 1024 : 512);
-
-	string_array_t *console_model_combo = any_array_create_from_raw_tmp(
-	    (void *[]){
-	        "Qwen",
-	        "Claude",
-	        "Grok",
-	        "Codex",
-	    },
-	    4);
-	ui_combo(&g_config->console_model, console_model_combo, tr("Console Model"), true, UI_ALIGN_LEFT, true);
 
 	ui_text(tr("Models"), UI_ALIGN_LEFT, 0x00000000);
 

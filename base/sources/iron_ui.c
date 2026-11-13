@@ -27,6 +27,7 @@ static int touch_hold_y = -1;
 // Touch and hold finger for right click
 // Show extra tooltips above finger / on-screen keyboard
 bool  ui_touch_control                         = false;
+bool  ui_tooltips                              = true;
 float ui_touch_speed                           = 1.0;
 bool  ui_is_cut                                = false;
 bool  ui_is_copy                               = false;
@@ -968,7 +969,7 @@ void ui_draw_tooltip() {
 		draw_end();
 	}
 
-	if (current->tooltip_text[0] != '\0' || current->tooltip_img != NULL) {
+	if (ui_tooltips && (current->tooltip_text[0] != '\0' || current->tooltip_img != NULL)) {
 		if (ui_input_changed()) {
 			current->tooltip_shown = false;
 			current->tooltip_wait  = current->input_dx == 0 && current->input_dy == 0; // Wait for movement before showing up again
@@ -1140,7 +1141,8 @@ void ui_draw_combo() {
 		}
 		if (current->_y + UI_ELEMENT_H() > iron_window_height() - current->window_border_bottom ||
 		    current->_y - UI_ELEMENT_H() * 2 < current->window_border_top) {
-			current->_x += current->combo_selected_w * unroll_right; // Next column
+			float column_w = current->combo_selected_w + (current->combo_selected_images != NULL ? UI_ELEMENT_H() : 0);
+			current->_x += column_w * unroll_right; // Next column
 			current->_y = current->combo_selected_y;
 		}
 	}
@@ -1705,7 +1707,8 @@ void ui_draw_tabs() {
 	int   dock_count = 0;
 	float dock_end_x = 0.0;
 	float drop_x     = -1.0;
-	bool  dock       = ui_on_tab_drop != NULL && (ui_on_tab_dock == NULL || ui_on_tab_dock(current->tab_handle));
+	bool  docked     = ui_on_tab_dock == NULL || ui_on_tab_dock(current->tab_handle);
+	bool  dock       = ui_on_tab_drop != NULL && docked;
 	bool  dragging   = dock && current->drag_tab_handle != NULL && !current->tab_vertical;
 	bool  dropped    = false;
 	bool  hover_dock = false;
@@ -1751,7 +1754,7 @@ void ui_draw_tabs() {
 				}
 			}
 		}
-		if (ui_on_tab_context_menu != NULL && dock && dockable && hover && current->input_released_r) {
+		if (ui_on_tab_context_menu != NULL && docked && dockable && hover && current->input_released_r) {
 			ui_on_tab_context_menu(current->tab_handle, i);
 		}
 		if (released) {
@@ -2044,7 +2047,7 @@ void ui_end_window() {
 		float full_size   = handle->layout == UI_LAYOUT_VERTICAL ? current->_y - current->window_header_h : current->_x - current->window_header_w;
 		full_size -= handle->scroll_offset;
 
-		if (full_size < window_size || !current->scroll_enabled) { // Disable scrollbar
+		if (full_size <= window_size || !current->scroll_enabled) { // Disable scrollbar
 			handle->scroll_enabled = false;
 			handle->scroll_offset  = 0;
 		}

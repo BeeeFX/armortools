@@ -763,6 +763,8 @@ gpu_compare_mode_t shader_context_get_compare_mode(char *s) {
 		return GPU_COMPARE_MODE_NEVER;
 	if (strcmp(s, "equal") == 0)
 		return GPU_COMPARE_MODE_EQUAL;
+	if (strcmp(s, "greater") == 0)
+		return GPU_COMPARE_MODE_GREATER;
 	return GPU_COMPARE_MODE_LESS;
 }
 
@@ -1017,9 +1019,16 @@ mesh_object_t *mesh_object_create(mesh_data_t *data, shader_data_t *material) {
 }
 
 void mesh_object_set_data(mesh_object_t *raw, mesh_data_t *data) {
-	raw->data = data;
+	bool changed = raw->data != NULL && raw->data != data;
+	raw->data    = data;
 	// Scale-up packed (-1,1) mesh coords
-	raw->base->transform->scale_world = data->scale_pos;
+	transform_t *t = raw->base->transform;
+	t->scale_world = data->scale_pos;
+	if (changed && t->measured) {
+		t->has_dim  = false;
+		t->measured = false;
+		transform_compute_dim(t);
+	}
 }
 
 void mesh_object_remove(mesh_object_t *raw) {
@@ -2470,7 +2479,7 @@ void render_path_bind_target(char *target, char *uniform) {
 	string_array_push(_render_path_bind_params, uniform);
 }
 
-void render_path_draw_shader(char *handle) {
+void render_path_draw_shader_keep_target(char *handle) {
 	// Full-screen triangle
 	// file/data_name/context
 	cached_shader_context_t *cc = (cached_shader_context_t *)any_map_get(_render_path_cached_shader_contexts, handle);
@@ -2483,6 +2492,11 @@ void render_path_draw_shader(char *handle) {
 	gpu_set_vertex_buffer(const_data_screen_aligned_vb);
 	gpu_set_index_buffer(const_data_screen_aligned_ib);
 	gpu_draw();
+	_render_path_bind_params = NULL;
+}
+
+void render_path_draw_shader(char *handle) {
+	render_path_draw_shader_keep_target(handle);
 	render_path_end();
 }
 

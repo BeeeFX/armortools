@@ -201,6 +201,7 @@ static void render_path_paint_draw_fill_object() {
 
 void render_path_paint_commands_particle(i32 tid, char *texpaint, bool is_mask) {
 	// Paint pass per particle
+	i32 drawn = 0;
 	for (i32 _pi = 0; _pi < 32; ++_pi) {
 		if (g_context->particles[_pi].timer == NULL || g_context->particles[_pi].hit_x == 0) {
 			continue;
@@ -222,6 +223,13 @@ void render_path_paint_commands_particle(i32 tid, char *texpaint, bool is_mask) 
 				}
 			}
 		}
+
+		if (drawn > 0) {
+			render_path_set_target("texpaint_blend1", NULL, NULL, GPU_CLEAR_NONE, 0, 0.0);
+			render_path_bind_target("texpaint_blend0", "tex");
+			render_path_draw_shader("Scene/copy_pass/copyR8_pass");
+		}
+		drawn++;
 
 		render_path_set_target(texpaint, render_path_paint_additional(string_tmp("texpaint_nor%d", tid), string_tmp("texpaint_pack%d", tid)), NULL,
 		                       GPU_CLEAR_NONE, 0, 0.0);
@@ -364,11 +372,30 @@ void render_path_paint_commands_paint(bool dilation) {
 		return;
 	}
 
+	if (g_context->brush_time == 0 && g_context->tool != TOOL_TYPE_PARTICLE && !g_context->pick_pos_nor_tex) {
+		g_context->brush_blend_dirty = true;
+	}
+
 	if (g_context->tool == TOOL_TYPE_COLORID) {
 		render_path_set_target("texpaint_colorid", NULL, NULL, GPU_CLEAR_COLOR, 0xff000000, 0.0);
 		render_path_bind_target("gbuffer2", "gbuffer2");
 		render_path_paint_draw_fullscreen_triangle();
-		ui_header_handle->redraws = 2;
+		render_target_t *rt = any_map_get(render_path_render_targets, "texpaint_colorid");
+		buffer_t        *a  = gpu_get_texture_pixels(rt->_image);
+#ifdef IRON_BGRA
+		i32 i0 = 2;
+		i32 i1 = 1;
+		i32 i2 = 0;
+#else
+		i32 i0 = 0;
+		i32 i1 = 1;
+		i32 i2 = 2;
+#endif
+		g_context->colorid_picked_color = color_set_rb(g_context->colorid_picked_color, buffer_get_u8(a, i0));
+		g_context->colorid_picked_color = color_set_gb(g_context->colorid_picked_color, buffer_get_u8(a, i1));
+		g_context->colorid_picked_color = color_set_bb(g_context->colorid_picked_color, buffer_get_u8(a, i2));
+		ui_header_handle->redraws       = 2;
+		ui_toolbar_handle->redraws      = 1;
 	}
 	else if (g_context->tool == TOOL_TYPE_PICKER || g_context->tool == TOOL_TYPE_MATERIAL) {
 		if (g_context->pick_pos_nor_tex) {
@@ -598,7 +625,7 @@ void render_path_paint_commands_paint(bool dilation) {
 
 		// Read texcoords from gbuffer
 		bool read_tc = (g_context->tool == TOOL_TYPE_FILL && g_context->fill_type == FILL_TYPE_FACE) || g_context->tool == TOOL_TYPE_CLONE ||
-		               g_context->tool == TOOL_TYPE_BLUR;
+		               g_context->tool == TOOL_TYPE_BLUR || context_is_pixel_snap();
 
 		if (g_context->tool == TOOL_TYPE_BLUR) {
 			render_path_paint_ref_snapshot(tid, is_mask);
@@ -831,6 +858,7 @@ void render_path_paint_draw_cursor(f32 mx, f32 my, f32 radius, f32 tint_r, f32 t
 	mesh_object_t *plane = scene_get_child(".Plane")->ext;
 	mesh_data_t   *geom  = plane->data;
 
+	gpu_vertex_textures = true;
 	render_path_set_target("", NULL, NULL, GPU_CLEAR_NONE, 0, 0.0);
 	gpu_set_pipeline(pipes_cursor);
 	render_target_t *rt   = any_map_get(render_path_render_targets, render_path_paint_depth());
@@ -870,6 +898,7 @@ void render_path_paint_draw_cursor_decal(f32 mx, f32 my, f32 radius, f32 opacity
 		brush_nodes_angle   = 0.0;
 	}
 
+	gpu_vertex_textures = true;
 	render_path_set_target("", NULL, NULL, GPU_CLEAR_NONE, 0, 0.0);
 	gpu_set_pipeline(pipes_cursor_decal);
 	render_target_t *rt   = any_map_get(render_path_render_targets, render_path_paint_depth());
@@ -886,7 +915,7 @@ void render_path_paint_draw_cursor_decal(f32 mx, f32 my, f32 radius, f32 opacity
 	vec4_t up = vec4_norm(camera_object_up_world(scene_camera));
 	gpu_set_float3(pipes_cursor_decal_camera_up, up.x, up.y, up.z);
 	gpu_set_float(pipes_cursor_decal_camera_align, context_is_brush_camera_align() ? 1.0f : 0.0f);
-	f32 opacity = g_context->brush_opacity * brush_nodes_opacity * opacity_scale;
+	f32 opacity = math_max(0.0, math_min(1.0, g_context->brush_opacity * brush_nodes_opacity * opacity_scale));
 	gpu_set_float(pipes_cursor_decal_opacity, opacity);
 	f32 angle = (g_context->brush_angle + brush_nodes_angle) * (math_pi() / 180.0);
 	gpu_set_float2(pipes_cursor_decal_angle, math_cos(angle), math_sin(angle));
@@ -952,6 +981,10 @@ void render_path_paint_commands_cursor() {
 }
 
 bool render_path_paint_paint_enabled() {
+	if (args_player) {
+		return false;
+	}
+
 	if (g_context->tool >= TOOL_TYPE_PLUGIN) {
 		return false; // Plugin tools handle the strokes themselves
 	}
@@ -1107,6 +1140,15 @@ void render_path_paint_draw_bake_derivative(void *_) {
 	_render_path_paint_deriv();
 }
 
+void render_path_paint_clear_blend() {
+	if (g_context->brush_blend_dirty) {
+		g_context->brush_blend_dirty = false;
+		render_path_set_target("texpaint_blend0", NULL, NULL, GPU_CLEAR_COLOR, 0x00000000, 0.0);
+		render_path_set_target("texpaint_blend1", NULL, NULL, GPU_CLEAR_COLOR, 0x00000000, 0.0);
+		render_path_end();
+	}
+}
+
 void render_path_paint_draw() {
 	if (!render_path_paint_paint_enabled()) {
 		return;
@@ -1201,12 +1243,7 @@ void render_path_paint_draw() {
 		}
 	}
 
-	if (g_context->brush_blend_dirty) {
-		g_context->brush_blend_dirty = false;
-		render_path_set_target("texpaint_blend0", NULL, NULL, GPU_CLEAR_COLOR, 0x00000000, 0.0);
-		render_path_set_target("texpaint_blend1", NULL, NULL, GPU_CLEAR_COLOR, 0x00000000, 0.0);
-		render_path_end();
-	}
+	render_path_paint_clear_blend();
 
 	if (g_context->paint2d) {
 		render_path_paint_restore_plane_mesh();
