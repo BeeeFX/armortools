@@ -376,18 +376,16 @@ static minic_val_t sng_layer_new_fill(minic_val_t *a, int n) {
 	return minic_val_int(l->id);
 }
 
-// sng_layer_group(id): put a top-level layer in a new group (New > Group with that layer selected); the group's id.
+// sng_layer_group(id): put a layer or a group in a new group, in its place (New > Group with it selected; on a mask or a
+// filter, its layer); the group's id. Groups nest since upstream's 43a9375 ("paint: merge layer fixes").
 static minic_val_t sng_layer_group(minic_val_t *a, int n) {
 	sng_need_undo();
 	slot_layer_t *l = sng_slot(minic_arg_i(a, n, 0));
 	if (l == NULL) {
 		return minic_val_int(-1);
 	}
-	if (slot_layer_is_layer_mask(l)) {
+	if (slot_layer_is_mask(l) || slot_layer_is_filter(l)) {
 		l = l->parent;
-	}
-	if (slot_layer_is_group(l) || slot_layer_is_in_group(l) || slot_layer_is_mask(l) || slot_layer_is_filter(l)) {
-		return minic_val_int(-1); // groups don't nest in ArmorPaint
 	}
 	slot_layer_t_array_t *layers   = sng_layers();
 	slot_layer_t_array_t *pointers = tab_layers_init_layer_map();
@@ -398,7 +396,8 @@ static minic_val_t sng_layer_group(minic_val_t *a, int n) {
 	context_set_layer(l);
 	array_remove((any_array_t *)layers, group);
 	array_insert((any_array_t *)layers, array_index_of((any_array_t *)layers, l) + 1, group);
-	l->parent = group;
+	group->parent = l->parent;
+	l->parent     = group;
 	sng_remap_layer_nodes(pointers);
 	context_set_layer(group);
 	history_new_group();

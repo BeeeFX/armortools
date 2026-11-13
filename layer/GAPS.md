@@ -5,8 +5,8 @@ The full analysis, with sources, is in Singerie's `docs/dev/research/parity-laye
 2026); this list is the working copy and changes as the layer does.
 
 Routes: **E** extension points only (data files, minic plugins, node graphs); **X** the layer's native module
-(`layer/native/`, compiled in through the `paint/plugins/external/` hook; upstream removed that hook on 22 October
-2026, and the layer's one core patch puts it back); **C** a core patch (an upstream file edited: avoided, see
+(`layer/native/`, compiled in through upstream's `paint/plugins/external/` hook; upstream removed it on 22 October
+2026 and restored it on 13 November, `32c7af5`, after the collective asked); **C** a core patch (an upstream file edited: avoided, see
 `patches/README.md`). Painter facts come from Adobe's public
 documentation only.
 
@@ -51,19 +51,23 @@ unlikely upstream).
 
 ## Small upstream pull requests this layer suggests
 
-Each is a few lines and would let the layer drop a workaround. None is opened yet: the first, the hook, starts as
-an issue whose text is ready in `patches/README.md` › Offering the hook back (Baptiste agreed on 12 November 2026
-that the collective may write to ArmorPaint's author; posting it is his step, from his account).
+Each is a few lines and would let the layer drop a workaround. The first, the hook, was asked for in an issue
+(armory3d/armorpaint#2185, 12 November 2026) and restored upstream the next day (`32c7af5`); its author welcomes pull
+requests that extend the scripting. The next two are prepared as branches here (`patches/README.md` › Offering the hook
+back); opening them is Baptiste's step, from his account. Since November upstream has its own script functions for
+the layer stack (`script_layer_new`, `_new_fill`, `_new_group`, `_new_mask`, `_delete`, `_move`, `_duplicate`,
+`_merge_down`, `_set_name`...): the layer's `sng_layer_*` stay (Singerie's plugin uses them), and a later clean-up may
+move them onto upstream's.
 
 | Pull request | Why |
 |---|---|
-| Put back the `paint/plugins/external/` hook (`project.c` compiles the folder in when it exists, `plugins_init()` calls `external_init()`), removed in `4f08044` "paint: cleanup" on 22 October 2026 | The layer's native module comes in through it; until then the layer carries it as its one core patch (`patches/0001-restore-external-hook.patch`, 15 lines) |
-| Declare `tab_layers_delete_layer`, `tab_layers_can_delete`, `tab_layers_can_merge_down` and `base_init_undo_layers` in `functions.h` | The bindings declare them by hand (checked by the build, but a header is safer) |
-| Script functions for the layer stack: create a paint or fill layer, a mask, a group; delete, move, duplicate, merge; opacity, blending, visibility, name | The core of `sng_layer_*`; upstream merges such binding PRs within days |
+| ~~Put back the `paint/plugins/external/` hook~~ **Done upstream** (`32c7af5`, 13 November 2026, after #2185) | The layer's core patch for it is gone |
+| Declare `tab_layers_delete_layer`, `tab_layers_can_delete`, `tab_layers_can_merge_down` and `base_init_undo_layers` in `functions.h` (**prepared**: branch `pr/declare-layer-functions`) | The bindings declare them by hand (checked by the build, but a header is safer) |
+| Script functions for the layer stack: create a paint or fill layer, a mask, a group; delete, move, duplicate, merge; opacity, blending, visibility, name | **Mostly upstream now** (`script_layer_*`, November 2026); what's left is what `sng_layer_*` has and they don't |
 | Script functions for history (undo, redo, the steps' names) | `sng_history_*` |
 | Script functions to choose the export preset and file name | `sng_export_set_preset`, `sng_export_set_name` |
-| `getenv` for scripts | `sng_getenv` |
+| `getenv` for scripts (**prepared**: branch `pr/script-get-env`, `script_get_env`) | `sng_getenv` |
 | Don't toggle distraction-free mode while typing in a text field (`util_shortcut_global`) | With Tab as that shortcut (Painter's), typing Tab in a field would hide the interface |
 | Make the undo layers before the first script runs (or guard history steps that copy pixels) | A script run with `--script` reached history before ArmorPaint's second frame and crashed on missing undo layers |
 | Undo of a move over several places swaps two slots instead of moving back | Seen in `history_undo` for `HISTORY_ACTION_ORDER_LAYERS` (to confirm with a repro first) |
-| Keep the preferences across builds | ArmorPaint discards `config.json` whenever the build's commit changes. It would not be enough for members on its own (each Singepaint version installs in its own folder, with no config), so Singerie's launcher carries them over (README › The defaults); upstream reading its config by name would make that simpler |
+| Keep the preferences across builds (upstream's `0435425` "paint: preserve config", 4 November 2026, now reads the config field by field: to check whether it still drops it when the commit changes) | ArmorPaint discarded `config.json` whenever the build's commit changed. It would not be enough for members on its own (each Singepaint version installs in its own folder, with no config), so Singerie's launcher carries them over (README › The defaults); upstream reading its config by name would make that simpler |

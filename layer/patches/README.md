@@ -4,16 +4,18 @@ A core patch is a change to one of upstream ArmorPaint's own files. Having none 
 adds lives in `layer/` (data files and the native module in `layer/native/`, compiled in through the
 `paint/plugins/external/` hook).
 
-It carries **one** since 31 October 2026: `0001-restore-external-hook.patch` (15 lines in `paint/plugins/project.c`
-and `paint/plugins/plugins.c`) puts back that hook, exactly as upstream had it until it removed it on 22 October
-2026 (`4f08044`, "paint: cleanup"). Without it the native module, and so every `sng_*` function, the defaults and the
-Singepaint title, wouldn't be compiled in. It is "local" for now. Baptiste agreed on 12 November 2026 that the
-collective offers it back, starting with a short issue (below); once posted, its link goes in this paragraph and in the
-patch header's `Upstream:` line. If upstream takes it back, delete the file and its line in `series`.
+It carries **none** since 13 November 2026. From 31 October to 13 November it carried one,
+`0001-restore-external-hook.patch` (15 lines in `paint/plugins/project.c` and `paint/plugins/plugins.c`), which put
+back that hook after upstream removed it on 22 October 2026 (`4f08044`, "paint: cleanup"). Upstream's author restored
+the hook himself, exactly as it was, in `32c7af5` ("plugins: restore external hook", 13 November 2026), in answer to
+the collective's issue below: thank you. The layer followed upstream to `22097df` and dropped the patch and its
+`series` line the same day.
 
-## Offering the hook back
+## Offering the hook back (done)
 
-The issue, posted by Baptiste on 12 November 2026: https://github.com/armory3d/armorpaint/issues/2185
+The issue, posted by Baptiste on 12 November 2026: https://github.com/armory3d/armorpaint/issues/2185. The author's
+answer, on 13 November: restored at `32c7af5`; pull requests that extend the scripting are welcome, and a clean-up of
+the script API, with breaking changes, will come eventually (so the layer's smoke test keeps watching the API).
 
 > **Title:** Could the `paint/plugins/external` hook come back?
 >
@@ -44,8 +46,15 @@ The issue, posted by Baptiste on 12 November 2026: https://github.com/armory3d/a
 > #endif
 > ```
 
-Then, whatever the answer: GAPS.md's two smallest pull requests (the four declarations in `functions.h`; `getenv` for
-scripts), and the answer recorded here.
+Then GAPS.md's two smallest pull requests, prepared on 13 November 2026 as branches of this repository, each one
+commit on upstream's `22097df`, for Baptiste to open from his account (they need a GitHub fork of
+armory3d/armorpaint, since this repository isn't one):
+
+- `pr/declare-layer-functions`, "paint: declare layer functions in functions.h": `base_init_undo_layers`,
+  `tab_layers_delete_layer`, `tab_layers_can_delete` and `tab_layers_can_merge_down` in `functions.h` (upstream's
+  `minic_impl.c` declared three of them locally; those lines go);
+- `pr/script-get-env`, "paint: add script_get_env": an environment variable for scripts, `""` when unset, next to
+  upstream's `script_get_platform`.
 
 ## The budget
 
