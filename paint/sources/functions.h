@@ -692,6 +692,7 @@ camera_object_t       *script_get_camera();
 context_t             *script_get_context();
 config_t              *script_get_config();
 platform_t             script_get_platform();
+char                  *script_get_env(char *name);
 project_t             *script_get_project();
 world_data_t          *script_get_world();
 object_t              *script_get_object(char *s);

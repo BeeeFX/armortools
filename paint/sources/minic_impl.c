@@ -371,6 +371,10 @@ platform_t script_get_platform() {
 	return PLATFORM_LINUX;
 #endif
 }
+char *script_get_env(char *name) {
+	char *value = getenv(name);
+	return value != NULL ? string_copy(value) : "";
+}
 project_t *script_get_project() {
 	return g_project;
 }
