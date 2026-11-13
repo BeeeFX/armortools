@@ -9,7 +9,12 @@ then the built ArmorPaint run headless.
 
 Without a build (checked against upstream's sources in this tree):
 - the theme follows ArmorPaint's theme fields in their order (its theme reader is positional, not by name);
-- the keymap preset only names actions ArmorPaint has (an upstream rename would silently drop a shortcut);
+- the keymap preset only names actions ArmorPaint has (an upstream rename would silently drop a shortcut), and gives
+  no shortcut, modifiers included, to two actions (ArmorPaint tells `1` from `Ctrl+1`, and would fire both of a pair);
+- `upstream.toml`'s `amake_sha256` is the hash of the build tool in this tree (the build runs it: layer/README.md >
+  Keeping up with upstream), and the build refuses another one without `--accept-tools`;
+- packaging takes only the files the build laid out (`sng_files.json`): one a test run added is left out and said, one
+  that changed refuses the package;
 - the export presets have upstream's shape, only channel ids ArmorPaint exports, and names that say their colour
   space as Singerie's rule wants (`basecolor_srgb`, `roughness_raw`...); no layer file replaces an upstream one.
 
@@ -19,11 +24,14 @@ With the build (each run in a copy of its folder, so the build stays untouched):
   the material nodes) compared with `api_snapshot.h`, so an upstream API change is caught;
 - the first start of a fresh copy gives it the Painter keymap and theme, written by ArmorPaint in its config.json,
   and its title bar says "Singepaint (based on ArmorPaint)" (also once a change marks the project unsaved);
-  a config with the member's own choice (ArmorPaint's default keymap and theme) keeps it;
-- `scripts/bindings.c`: every sng_* function on a fresh project, then an export with the studio preset, whose files
-  are checked (names, PNG, size).
+  a config with the member's own choice (ArmorPaint's default keymap and theme) keeps it; and a fresh config with a
+  `data/sng_keep.json` (the preferences Singerie's launcher carries over from the build before) takes the names it
+  knows and leaves out the rest;
+- `scripts/bindings.c`: every sng_* function on a fresh project, then exports: the studio preset (names, PNG, size,
+  and what the pictures hold: the packed `orm_raw` must be the three single maps, height flat at 0), the packed preset,
+  and 16 bits (EXR).
 
-Exit status 0 when everything passed. Standard library only (Python 3.10+).
+Exit status 0 when everything passed. Standard library only (Python 3.11+).
 """
 
 from __future__ import annotations
@@ -128,9 +136,8 @@ def static_checks() -> None:
         for action, key in merged.items():
             if key and "+" not in key and key not in ("left", "right", "middle", "ctrl", "shift", "alt", "number"):
                 plain.setdefault(key, []).append(action)
-        allowed = {frozenset({"node_overview", "brush_camera_align"}), frozenset({"node_search", "keymap_search"})}
-        clashes = {k: v for k, v in plain.items() if len(v) > 1 and frozenset(v) not in allowed}
-        check(f"keymap_presets/{path.name} gives no plain key to two viewport actions", not clashes, clashes)
+        clashes = {k: v for k, v in shortcuts(merged).items() if len(v) > 1 and frozenset(v) not in SHARED}
+        check(f"keymap_presets/{path.name} gives no shortcut (modifiers included) to two actions", not clashes, clashes)
         # Keys upstream reads itself in a tab (F2 renames the layer or mesh under the mouse, F5 refreshes the browser):
         # a preset action on one of them would fire as well (the F2 clash with the node editor, 1 November 2026).
         taken = {key for key, actions in plain.items() if key in hard_wired_keys()}
@@ -162,6 +169,96 @@ def static_checks() -> None:
             if word not in ("srgb", "raw") or (word == "srgb") != colour or (channel in COLOUR_CHANNELS) != colour and channel != "emission_mask":
                 wrong.append(name)
         check(f"export_presets/{path.name} names say their colour space (colour srgb, data raw)", not wrong, wrong)
+
+    # The build tool: the one upstream.toml names, by its hash (build_windows.py refuses another without --accept-tools).
+    pinned, actual = amake_hashes()
+    check("upstream.toml's amake_sha256 is the hash of this tree's build tool", bool(pinned) and pinned == actual, (pinned, actual))
+    tool_checks()
+
+
+def tool(name: str):
+    """layer/tools/<name>.py as a module (the build and packaging tools, checked without building)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(f"sng_{name}", LAYER / "tools" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def tool_checks() -> None:
+    """The build tool's pin and the package's file list, on stand-in files (no build needed)."""
+    import zipfile
+
+    build_windows, package_windows = tool("build_windows"), tool("package_windows")
+    with tempfile.TemporaryDirectory(prefix="sng-static-") as folder:
+        tmp = Path(folder)
+        other = tmp / "amake.exe"
+        other.write_bytes(b"MZ not upstream's pinned build tool")
+        try:
+            build_windows.check_amake(other, accept_tools=False)
+            refused = ""
+        except RuntimeError as exc:
+            refused = str(exc)
+        check("the build refuses a build tool upstream.toml doesn't pin, naming --accept-tools", "--accept-tools" in refused, refused)
+        check("--accept-tools lets a person run it once they read what changed", bool(build_windows.check_amake(other, accept_tools=True)))
+        pinned = REPO / build_windows.AMAKE
+        if pinned.is_file():
+            check("the tree's own build tool passes", build_windows.check_amake(pinned, accept_tools=False) == amake_hashes()[0])
+
+        app = tmp / "armorpaint"
+        (app / "data" / "plugins").mkdir(parents=True)
+        (app / "ArmorPaint.exe").write_bytes(b"MZ")
+        (app / "data" / "version.json").write_text('{"sha": "0000000+sng.0000000"}', encoding="utf-8")
+        count = build_windows.write_files_list(app)
+        (app / "data" / "plugins" / "singerie.c").write_text("void main() {}\n", encoding="utf-8")  # a test run's
+        (app / "data" / "config.json").write_text("{}", encoding="utf-8")
+        archive = tmp / "out.zip"
+        files, left_out = package_windows.pack(app, archive, "singepaint")
+        names = sorted(zipfile.ZipFile(archive).namelist())
+        check(f"the package holds the {count} files the build laid out and their list", files == count + 1 and names == [
+            "singepaint/ArmorPaint.exe", "singepaint/data/version.json", f"singepaint/{build_windows.FILES_LIST}"], names)
+        check("a file a test run left in the build is left out, and said", left_out == ["data/config.json", "data/plugins/singerie.c"], left_out)
+        (app / "data" / "version.json").write_text('{"sha": "changed"}', encoding="utf-8")
+        try:
+            package_windows.laid_out(app)
+            refused = ""
+        except package_windows.Refused as exc:
+            refused = str(exc)
+        check("a laid-out file that changed since the build refuses the package, named", "data/version.json" in refused, refused)
+
+
+# Pairs upstream's own default keymap gives one shortcut on purpose: they fire in different places.
+SHARED = {
+    frozenset({"node_overview", "brush_camera_align"}),
+    frozenset({"node_search", "keymap_search"}),
+    frozenset({"action_pan", "view_pivot_center"}),
+}
+
+
+def shortcuts(keymap: dict[str, str]) -> dict[tuple[str, ...], list[str]]:
+    """The actions of each whole shortcut (its modifiers and its key: ArmorPaint fires a shortcut only when exactly its
+    modifiers are held, keymap_shortcut in paint/sources/keymap.c), leaving out a bare modifier or mouse button (the
+    paint stroke, the decal mask: read where they apply)."""
+    found: dict[tuple[str, ...], list[str]] = {}
+    for action, key in keymap.items():
+        if not key:
+            continue
+        *modifiers, last = key.lower().split("+")
+        if last in ("ctrl", "shift", "alt") or (not modifiers and last in ("left", "right", "middle", "number")):
+            continue
+        found.setdefault((*sorted(modifiers), last), []).append(action)
+    return found
+
+
+def amake_hashes() -> tuple[str, str]:
+    """upstream.toml's amake_sha256 and the hash of the amake.exe in this tree ("" when either is missing)."""
+    import hashlib
+
+    found = re.search(r'(?m)^amake_sha256\s*=\s*"([0-9a-f]*)"', (LAYER / "upstream.toml").read_text(encoding="utf-8"))
+    tool = REPO / "base" / "tools" / "bin" / "windows_x64" / "amake.exe"
+    actual = hashlib.sha256(tool.read_bytes()).hexdigest() if tool.is_file() else ""
+    return (found.group(1) if found else ""), actual
 
 
 def hard_wired_keys() -> set[str]:
@@ -275,6 +372,53 @@ def png_size(path: Path) -> tuple[int, int] | None:
     return struct.unpack(">II", data[16:24])
 
 
+def png_pixel(path: Path, x: int, y: int = 0) -> tuple[int, ...] | None:
+    """The 8-bit pixel at (x, y) of a PNG, decoded with the standard library (rows 0 to y unfiltered: filter types 0
+    to 4); None for a file that isn't an 8-bit, non-interlaced PNG."""
+    import zlib
+
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    at, idat, header = 8, b"", None
+    while at + 8 <= len(data):
+        length, kind = struct.unpack(">I4s", data[at : at + 8])
+        body = data[at + 8 : at + 8 + length]
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat += body
+        at += 12 + length
+    if header is None:
+        return None
+    width, height, depth, colour, _, _, interlace = header
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(colour)
+    if depth != 8 or channels is None or interlace or not (0 <= x < width and 0 <= y < height):
+        return None
+    raw = zlib.decompress(idat)
+    stride = width * channels
+    previous = bytearray(stride)
+    for row in range(y + 1):
+        kind = raw[row * (stride + 1)]
+        line = bytearray(raw[row * (stride + 1) + 1 : (row + 1) * (stride + 1)])
+        for i in range(stride):
+            left = line[i - channels] if i >= channels else 0
+            up = previous[i]
+            corner = previous[i - channels] if i >= channels else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                guess = left + up - corner
+                pa, pb, pc = abs(guess - left), abs(guess - up), abs(guess - corner)
+                line[i] = (line[i] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 0xFF
+        previous = line
+    return tuple(previous[x * channels : (x + 1) * channels])
+
+
 def check_api(app: Path, update: bool, allow_additions: bool = False, snapshot_out: Path | None = None) -> None:
     print("== --api: the layer's functions, and upstream's script API against the snapshot", flush=True)
     result = run(app, "--api")
@@ -343,6 +487,31 @@ def check_defaults(app: Path, tmp: Path) -> None:
     saved = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
     check("and stay in config.json after ArmorPaint wrote it again", (saved.get("keymap"), saved.get("theme")) == ("default.json", "default.json"), saved.get("keymap"))
 
+    # An update: no config.json in the new version's folder, and the preferences of the build before carried over by
+    # name in data/sng_keep.json (Singerie's launcher writes it). Known names that fit are taken, over the layer's
+    # defaults; a preset this build lacks, a value Preferences wouldn't allow and an unknown name are left out.
+    config.unlink(missing_ok=True)
+    keep = {
+        "keymap": "default.json",
+        "theme": "not_in_this_build.json",
+        "window_scale": 1.5,
+        "undo_steps": 12,
+        "pressure_radius": False,
+        "pressure_sensitivity": 99,
+        "layer_res": 4,
+    }
+    (app / "data" / "sng_keep.json").write_text(json.dumps(keep), encoding="utf-8")
+    report.unlink(missing_ok=True)
+    run(app, "--background", "--script", os.fspath(script(tmp, "defaults.c", REPORT=os.fspath(report))))
+    values = read_report(report)
+    check("a kept keymap name is applied on a fresh config", values.get("keymap") == "default.json", values.get("keymap"))
+    check("a kept theme this build lacks leaves the layer's", values.get("theme") == "painter.json", values.get("theme"))
+    check("four preferences carried over (keymap, UI scale, undo steps, pen pressure on size)", values.get("carried") == "4", values.get("carried"))
+    saved = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else {}
+    kept = (saved.get("window_scale"), saved.get("undo_steps"), saved.get("pressure_radius"), saved.get("pressure_sensitivity") != 99)
+    check("ArmorPaint saved them in its config.json, the out-of-range one left out", kept == (1.5, 12, False, True), kept)
+    (app / "data" / "sng_keep.json").unlink(missing_ok=True)
+
 
 EXPECTED_BINDINGS = {
     "title_start": f"untitled - {SHOWN_NAME}",
@@ -364,6 +533,7 @@ EXPECTED_BINDINGS = {
     "index_paint": "1",
     "history_after_paint": "New Layer",
     "set_name": "1",
+    "set_opacity_nan_refused": "0",
     "name_paint": "Rust",
     "history_after_name": "Rename Layer",
     "set_opacity": "1",
@@ -413,6 +583,23 @@ EXPECTED_BINDINGS = {
     "bake_set_axis_refused": "0",
     "bake_set_unknown": "0",
     "bake_get_unknown": "-1.000",
+    "bake_set_samples_refused": "0",
+    "bake_set_high_poly": "1",
+    "bake_set_high_poly_refused": "0",
+    "bake_set_high_poly_negative": "0",
+    "asset_repoint_unknown": "0",
+    "mesh_reimport_missing": "0",
+    "export_mode_start": "visible",
+    "export_format_start": "png",
+    "export_destination_start": "disk",
+    "export_mode_selected": "selected",
+    "info_export_mode": "selected",
+    "info_export_format": "jpg",
+    "export_set_destination": "1",
+    "export_destination_project": "project",
+    "info_export_destination": "project",
+    "export_set_destination_unknown": "0",
+    "info_unknown": "",
     "preset_start": "generic",
     "getenv": "from the smoke test",
     "getenv_unset": "",
@@ -433,7 +620,12 @@ EXPECTED_BINDINGS = {
     "export_set_format": "1",
     "export_set_bits_refused": "0",
     "export_bits": "8",
+    "export_textures_missing_folder": "0",
     "export_textures": "1",
+    "export_set_packed": "1",
+    "export_textures_packed": "1",
+    "export_set_bits_16": "1",
+    "export_textures_16": "1",
     "done": "yes",
 }
 
@@ -441,16 +633,20 @@ EXPECTED_BINDINGS = {
 def check_bindings(app: Path, tmp: Path) -> None:
     print("== The sng_* functions on a fresh project, then an export with the studio preset", flush=True)
     report = tmp / "bindings.txt"
-    exported = tmp / "export"
-    exported.mkdir()
+    exported, packed, deep = tmp / "export", tmp / "export_packed", tmp / "export_16"
+    for folder in (exported, packed, deep):
+        folder.mkdir()
     environment = {**os.environ, "SNG_SMOKE": "from the smoke test"}
-    result = run(
-        app,
-        "--background",
-        "--script",
-        os.fspath(script(tmp, "bindings.c", REPORT=os.fspath(report), EXPORT=os.fspath(exported))),
-        environment=environment,
+    filled = script(
+        tmp,
+        "bindings.c",
+        REPORT=os.fspath(report),
+        EXPORT=os.fspath(exported),
+        EXPORT_PACKED=os.fspath(packed),
+        EXPORT_16=os.fspath(deep),
+        MISSING=os.fspath(tmp / "not_there" / "nothing.png"),
     )
+    result = run(app, "--background", "--script", os.fspath(filled), environment=environment)
     values = read_report(report)
     if not check("the bindings script ran to its end", values.get("done") == "yes", (result.returncode, result.stdout[-800:], result.stderr[-400:])):
         print("     report so far:\n       " + "\n       ".join(f"{k}={v}" for k, v in values.items()))
@@ -467,6 +663,31 @@ def check_bindings(app: Path, tmp: Path) -> None:
         check(f"exported {path.name} (PNG, 2048 x 2048)", size == (2048, 2048), size)
     extra = sorted(p.name for p in exported.iterdir() if p.name not in {f"smoke_{t['name']}.png" for t in preset["textures"]})
     check("the export wrote nothing else", not extra, extra)
+    check_pictures(exported, packed, deep, preset)
+
+
+def check_pictures(exported: Path, packed: Path, deep: Path, preset: dict) -> None:
+    """What the maps hold, from one pixel each (the fill layer on top covers the mesh, so every pixel of a map is the
+    same): each channel must be where the presets say, which a swapped channel in a preset or a change of a channel's
+    meaning upstream would break."""
+    centre = 1024
+
+    def pixel(folder: Path, name: str) -> tuple[int, ...] | None:
+        path = folder / f"smoke_{name}.png"
+        return png_pixel(path, centre) if path.is_file() else None
+
+    occlusion, roughness, metallic = (pixel(exported, f"{n}_raw") for n in ("occlusion", "roughness", "metallic"))
+    orm = pixel(packed, "orm_raw")
+    single = tuple(p[0] if p else None for p in (occlusion, roughness, metallic))
+    check("the packed orm_raw holds occlusion, roughness, metallic in red, green, blue", orm is not None and orm[:3] == single, (orm, single))
+    check("roughness and metallic differ here, so a swap of the two would show", single[1] != single[2], single)
+    base, base_packed = pixel(exported, "basecolor_srgb"), pixel(packed, "basecolor_srgb")
+    check("both presets write the same base colour", base is not None and base_packed is not None and base[:3] == base_packed[:3], (base, base_packed))
+    height = pixel(exported, "height_raw")
+    check("an unpainted height map is 0 (ArmorPaint's flat: Singerie builds the material with Midlevel 0)", height is not None and height[0] == 0, height)
+    expected = {f"smoke_{t['name']}.exr" for t in preset["textures"]}
+    found = {p.name for p in deep.iterdir()}
+    check("at 16 bits the studio preset writes EXR", found == expected, sorted(found ^ expected))
 
 
 def app_checks(source: Path, update: bool, allow_additions: bool = False, snapshot_out: Path | None = None) -> None:

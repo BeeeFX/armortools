@@ -20,15 +20,23 @@ documentation only.
 | Script functions for layers, masks, groups, reordering, history, bake settings and export (the adapter every later feature builds on) | X | `native/sng_bindings.c`, the `sng_*` functions |
 | A script can choose the export preset, bit depth, format, layers and file name (plugins couldn't) | X | `sng_export_*` |
 | `getenv` for scripts (Singerie's pipeline plugin could drop its `.singerie` hand-over) | X | `sng_getenv` |
+| The Export window read back (Layers, Format, Destination), so a plugin's export puts the artist's choices back | X | `sng_export_mode`, `sng_export_format`, `sng_export_destination`, `sng_export_set_destination` |
+| A texture repointed to another file, and the mesh replaced with the layers kept, from a script (ArmorPaint's own Reimport, without its windows) | X | `sng_asset_repoint`, `sng_mesh_reimport` |
+| Preferences carried over to a new build (by name, when the upstream commit changed) | X + Singerie's launcher | `sng_apply_kept`, `data/sng_keep.json` |
 
 ## Next, in order
 
+Reordered 12 November 2026 (Baptiste's pick on the 11 November audit, ARM-M3): baking first, because a hero prop with
+a high-poly can't be finished in Singepaint without it, where generators and smart masks only make it slower. The
+numbers are the items' own and stay as they were.
+
 | # | Painter feature | ArmorPaint today | Route | Size |
 |---|---|---|---|---|
+| 4 | **Bake all maps in one click** (cage-free first) | One map per Bake Texture node; no cage, ray distance or match by name | E: a bake panel plugin on `sng_bake_*` (running a bake from a script is the next binding) | M |
 | 1 | **Generators** (curvature, AO, edge wear, dirt, position gradient) | Building blocks only: Bake Texture, Curvature, Gradient, Noise nodes | E: a pack of node-group presets | M |
 | 2 | **Smart masks and single-graph smart materials** | A fill mask's graph can be saved as `.arm` | E: a library built from CC0 textures | S–M |
+| 13 | **Anchor points** (a mask or generator that reads the painted height or colour of a layer below) | None | E or X: to be studied with the generators (they would read it) | M |
 | 3 | **Multi-layer smart materials** | No: materials are single node graphs | E: a loader plugin on `sng_layer_*` and `sng_mask_new` | M |
-| 4 | **Bake all maps in one click** | One map per Bake Texture node; no cage, ray distance or match by name | E: a bake panel plugin on `sng_bake_*` (running a bake from a script is the next binding) | M |
 | 5 | **OCIO view in the viewport** | No OCIO; a `.cube` LUT only | E: the project's view baked to a `.cube` and loaded as the viewport LUT | S |
 | 6 | **Layer shortcuts** (Delete, Ctrl+D duplicate, Ctrl+G group) | Menu items only; plugins can't add shortcuts | X: an update hook in the native module, careful with text fields | S |
 | 7 | **Tabs, menus and shortcuts for plugins** (a shelf, a properties panel, the bake panel outside the Plugins tab) | Plugins draw only inside the Plugins tab | C, offered upstream as a small API | S |
@@ -43,7 +51,9 @@ unlikely upstream).
 
 ## Small upstream pull requests this layer suggests
 
-Each is a few lines and would let the layer drop a workaround. None is opened yet.
+Each is a few lines and would let the layer drop a workaround. None is opened yet: the first, the hook, starts as
+an issue whose text is ready in `patches/README.md` › Offering the hook back (Baptiste agreed on 12 November 2026
+that the collective may write to ArmorPaint's author; posting it is his step, from his account).
 
 | Pull request | Why |
 |---|---|
@@ -56,4 +66,4 @@ Each is a few lines and would let the layer drop a workaround. None is opened ye
 | Don't toggle distraction-free mode while typing in a text field (`util_shortcut_global`) | With Tab as that shortcut (Painter's), typing Tab in a field would hide the interface |
 | Make the undo layers before the first script runs (or guard history steps that copy pixels) | A script run with `--script` reached history before ArmorPaint's second frame and crashed on missing undo layers |
 | Undo of a move over several places swaps two slots instead of moving back | Seen in `history_undo` for `HISTORY_ACTION_ORDER_LAYERS` (to confirm with a repro first) |
-| Keep the preferences across builds | ArmorPaint discards `config.json` whenever the build's commit changes, so every update resets a member's preferences |
+| Keep the preferences across builds | ArmorPaint discards `config.json` whenever the build's commit changes. It would not be enough for members on its own (each Singepaint version installs in its own folder, with no config), so Singerie's launcher carries them over (README › The defaults); upstream reading its config by name would make that simpler |

@@ -1,8 +1,9 @@
 // Run by smoke.py as `ArmorPaint --background --script <this, filled in>` on a fresh project (the default mesh and
 // one paint layer): every sng_* function once, over three frames (masks invert and apply on a later frame than the
-// one they're made in, as with the Layers tab), then an export with the studio preset. Writes "key=value" lines;
-// smoke.py checks them.
-// @REPORT@ and @EXPORT@ are replaced with the report file's path and the export folder.
+// one they're made in, as with the Layers tab), then exports: the studio preset, the packed one into another folder,
+// and the studio preset again at 16 bits (EXR). Writes "key=value" lines; smoke.py checks them and the pictures.
+// @REPORT@, @EXPORT@, @EXPORT_PACKED@ and @EXPORT_16@ are replaced with the report file's path and three folders,
+// @MISSING@ with a path that isn't there.
 // minic: at most 32 functions besides main, main last; literals aren't kept in globals (string() copies are).
 
 char *report;
@@ -45,8 +46,33 @@ void step_export() {
 	put_i("export_set_format", sng_export_set_format("png"));
 	put_i("export_set_bits_refused", sng_export_set_bits(12));
 	put_i("export_bits", sng_export_bits());
+	put_i("export_textures_missing_folder", sng_export_textures("@MISSING@"));
 	put_i("export_textures", sng_export_textures("@EXPORT@"));
+	put_i("export_set_packed", sng_export_set_preset("singerie_packed"));
+	put_i("export_textures_packed", sng_export_textures("@EXPORT_PACKED@"));
+	sng_export_set_preset("singerie");
+	put_i("export_set_bits_16", sng_export_set_bits(16));
+	put_i("export_textures_16", sng_export_textures("@EXPORT_16@"));
 	finish();
+}
+
+// The Export window read back and set: Layers, Format, Destination (what Singerie's publish puts back afterwards), also
+// through sng_info, which a plugin that must load in older builds uses.
+void step_export_window() {
+	put("export_mode_start", sng_export_mode());
+	put("export_format_start", sng_export_format());
+	put("export_destination_start", sng_export_destination());
+	sng_export_set_mode("selected");
+	sng_export_set_format("jpg");
+	put("export_mode_selected", sng_export_mode());
+	put("info_export_mode", sng_info("export_mode"));
+	put("info_export_format", sng_info("export_format"));
+	put_i("export_set_destination", sng_export_set_destination("project"));
+	put("export_destination_project", sng_export_destination());
+	put("info_export_destination", sng_info("export_destination"));
+	put_i("export_set_destination_unknown", sng_export_set_destination("nonsense"));
+	sng_export_set_destination("disk");
+	put("info_unknown", sng_info("nonsense"));
 }
 
 void step_masks() {
@@ -59,6 +85,7 @@ void step_masks() {
 	put("kind_white_after_apply", sng_layer_kind(mask_white));
 	put("history_after_apply", sng_history_step(0));
 	put_i("count_after_apply", sng_layer_count());
+	step_export_window();
 	script_notify_on_next_frame(step_export);
 }
 
@@ -92,6 +119,7 @@ void main() {
 	put_i("set_name", sng_layer_set_name(paint_id, "Rust"));
 	put("name_paint", sng_layer_name(paint_id));
 	put("history_after_name", sng_history_step(0));
+	put_i("set_opacity_nan_refused", sng_layer_set_opacity(paint_id, sqrt(-1.0)));
 	put_i("set_opacity", sng_layer_set_opacity(paint_id, 0.5));
 	put_f("opacity_paint", sng_layer_opacity(paint_id));
 	put_i("set_blending", sng_layer_set_blending(paint_id, "multiply"));
@@ -152,6 +180,10 @@ void main() {
 	put_f("bake_axis", sng_bake_get("axis"));
 	put_i("bake_set_axis_refused", sng_bake_set("axis", 9));
 	put_i("bake_set_unknown", sng_bake_set("nonsense", 1));
+	put_i("bake_set_samples_refused", sng_bake_set("samples", 0));
+	put_i("bake_set_high_poly", sng_bake_set("high_poly", 0));
+	put_i("bake_set_high_poly_refused", sng_bake_set("high_poly", 5));
+	put_i("bake_set_high_poly_negative", sng_bake_set("high_poly", -1));
 	put_f("bake_get_unknown", sng_bake_get("nonsense"));
 
 	// The rest.
@@ -159,6 +191,8 @@ void main() {
 	put("preset_start", sng_export_preset());
 	put("getenv", sng_getenv("SNG_SMOKE"));
 	put("getenv_unset", sng_getenv("SNG_SMOKE_UNSET_VARIABLE"));
+	put_i("asset_repoint_unknown", sng_asset_repoint("@MISSING@", "@MISSING@"));
+	put_i("mesh_reimport_missing", sng_mesh_reimport("@MISSING@"));
 	put_i("redraw", sng_redraw());
 	put_i("count_end_of_frame", sng_layer_count());
 	script_notify_on_next_frame(step_masks);

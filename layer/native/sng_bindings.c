@@ -21,11 +21,14 @@
 
 #include "../../sources/functions.h"
 #include "iron_array.h"
+#include "iron_file.h"
+#include "iron_json.h"
 #include "iron_string.h"
 #include "iron_system.h"
 #include "minic.h"
 #include "sng_build.h"
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,6 +37,7 @@
 #define SNG_DEFAULT_KEYMAP "painter.json"                     // data/keymap_presets/
 #define SNG_DEFAULT_THEME  "painter.json"                     // data/themes/
 #define SNG_SHOWN_NAME     "Singepaint (based on ArmorPaint)" // in the window's title bar (Baptiste, 5 October 2026)
+#define SNG_KEEP_FILE      "sng_keep.json"                    // data/: preferences carried over from the build before
 
 // BEGIN internals not in upstream's headers
 // ArmorPaint defines these without declaring them in a header. build_windows.py checks that each line below still
@@ -57,6 +61,7 @@ bool                           tab_layers_can_merge_down(slot_layer_t *l);
 // END internals not in upstream's headers
 
 static bool sng_defaults_applied = false;
+static int  sng_kept_count       = 0; // preferences data/sng_keep.json gave this fresh config (The defaults)
 
 // ████ Helpers ████
 
@@ -151,6 +156,20 @@ static const char *sng_blend_names[] = {"mix",        "darken",       "multiply"
 static const char *sng_export_mode_names[] = {"visible", "selected", "per_object", "per_udim_tile"};
 #define SNG_EXPORT_MODE_COUNT ((int)(sizeof(sng_export_mode_names) / sizeof(sng_export_mode_names[0])))
 
+// What the Export window says now (its Layers, Format and Destination, kept by ArmorPaint for the session).
+static const char *sng_export_mode_now(void) {
+	int mode = (int)script_get_context()->layers_export;
+	return mode >= 0 && mode < SNG_EXPORT_MODE_COUNT ? sng_export_mode_names[mode] : "";
+}
+
+static const char *sng_export_format_now(void) {
+	return script_get_context()->format_type == TEXTURE_LDR_FORMAT_JPG ? "jpg" : "png";
+}
+
+static const char *sng_export_destination_now(void) {
+	return script_get_context()->layers_destination == EXPORT_DESTINATION_PACK_INTO_PROJECT ? "project" : "disk";
+}
+
 // ████ About the layer ████
 
 // sng_version(): "sng 0.1.0 (api 1, layer <commit>, ArmorPaint <commit>, built <date>)".
@@ -168,7 +187,11 @@ static minic_val_t sng_api_level(minic_val_t *a, int n) {
 }
 
 // sng_info(what): "name" (the name the build shows), "upstream", "layer", "built", "keymap", "theme", "defaults"
-// ("applied" when this start gave a fresh config the layer's keymap and theme, else "kept").
+// ("applied" when this start gave a fresh config the layer's keymap and theme, else "kept"), "carried" (how many
+// preferences data/sng_keep.json gave that fresh config, "0" when none), and the Export window's "export_mode",
+// "export_format" and "export_destination" (as sng_export_mode() and the others). An unknown word gives "": that is
+// how a plugin that must also load in older builds reads a newer value. minic compiles a whole plugin before running
+// it, so a plugin naming a function an older build lacks doesn't load there at all; sng_info is in every build.
 static minic_val_t sng_info(minic_val_t *a, int n) {
 	const char *what   = minic_arg_p(a, n, 0);
 	config_t   *config = script_get_config();
@@ -192,6 +215,20 @@ static minic_val_t sng_info(minic_val_t *a, int n) {
 	}
 	if (sng_is(what, "defaults")) {
 		return sng_text(sng_defaults_applied ? "applied" : "kept");
+	}
+	if (sng_is(what, "carried")) {
+		static char carried[16];
+		snprintf(carried, sizeof(carried), "%d", sng_kept_count);
+		return sng_text(carried);
+	}
+	if (sng_is(what, "export_mode")) {
+		return sng_text(sng_export_mode_now());
+	}
+	if (sng_is(what, "export_format")) {
+		return sng_text(sng_export_format_now());
+	}
+	if (sng_is(what, "export_destination")) {
+		return sng_text(sng_export_destination_now());
 	}
 	return sng_text("");
 }
@@ -320,7 +357,8 @@ static minic_val_t sng_layer_new_paint(minic_val_t *a, int n) {
 }
 
 // sng_layer_new_fill(): a fill layer above the current one, filled with the current material (New > Fill Layer,
-// made at once instead of on the next frame); its id.
+// made at once instead of on the next frame); its id. It pushes two history steps, "New Layer" then "To Fill Layer",
+// as the Layers tab does over two frames: Ctrl+Z twice takes it away (layer/README.md says so).
 static minic_val_t sng_layer_new_fill(minic_val_t *a, int n) {
 	sng_need_undo();
 	context_t    *context = script_get_context();
@@ -442,7 +480,7 @@ static minic_val_t sng_layer_set_opacity(minic_val_t *a, int n) {
 	sng_need_undo();
 	slot_layer_t *l       = sng_slot(minic_arg_i(a, n, 0));
 	float         opacity = minic_arg_f(a, n, 1);
-	if (l == NULL) {
+	if (l == NULL || opacity != opacity) { // NaN: no opacity at all
 		return minic_val_int(0);
 	}
 	context_set_layer(l);
@@ -616,7 +654,9 @@ static minic_val_t sng_history_redo(minic_val_t *a, int n) {
 // ████ Bake settings ████
 // The settings every Bake Texture node shares (its type stays per node): "samples", "ao_strength", "ao_radius",
 // "ao_offset", "curv_strength", "curv_radius", "curv_offset", "curv_smooth", "high_poly" (the mesh to bake from,
-// by index), "axis" (0 xyz, 1 x, 2 y, 3 z, 4 -x, 5 -y, 6 -z) and "up_axis" (0 z, 1 y, 2 x).
+// by index), "axis" (0 xyz, 1 x, 2 y, 3 z, 4 -x, 5 -y, 6 -z) and "up_axis" (0 z, 1 y, 2 x). Refused (0): a NaN,
+// "samples" below 1, a "high_poly" that isn't one of the project's meshes (ArmorPaint reads its mesh list at that
+// index unchecked at the next bake), an axis out of its range.
 
 static bool sng_bake_field(const char *setting, float **f, i32 **i, int **e) {
 	context_t *c = script_get_context();
@@ -674,8 +714,19 @@ static minic_val_t sng_bake_set(minic_val_t *a, int n) {
 	i32   *i;
 	int   *e;
 	float  value = minic_arg_f(a, n, 1);
-	if (!sng_bake_field(minic_arg_p(a, n, 0), &f, &i, &e)) {
+	if (!sng_bake_field(minic_arg_p(a, n, 0), &f, &i, &e) || value != value) {
 		return minic_val_int(0);
+	}
+	context_t *c = script_get_context();
+	if (i == &c->bake_samples && value < 1.0f) {
+		return minic_val_int(0);
+	}
+	if (i == &c->bake_high_poly) {
+		project_t *project = script_get_project();
+		int        meshes  = project != NULL && project->_ != NULL && project->_->paint_objects != NULL ? project->_->paint_objects->length : 0;
+		if ((int)value < 0 || (int)value >= meshes) {
+			return minic_val_int(0);
+		}
 	}
 	if (f != NULL) {
 		*f = value;
@@ -783,6 +834,38 @@ static minic_val_t sng_export_set_mode(minic_val_t *a, int n) {
 	return minic_val_int(0);
 }
 
+// sng_export_format(), sng_export_mode(), sng_export_destination(): what the Export window says now ("png" or "jpg";
+// "visible", "selected", "per_object" or "per_udim_tile"; "disk" or "project"), so a plugin can put it back after
+// exporting with its own choices.
+static minic_val_t sng_export_format(minic_val_t *a, int n) {
+	return sng_text(sng_export_format_now());
+}
+
+static minic_val_t sng_export_mode(minic_val_t *a, int n) {
+	return sng_text(sng_export_mode_now());
+}
+
+static minic_val_t sng_export_destination(minic_val_t *a, int n) {
+	return sng_text(sng_export_destination_now());
+}
+
+// sng_export_set_destination(destination): "disk" (files in the folder given) or "project" (packed into the project
+// as its own textures, nothing written in the folder), as the Export window's Destination.
+static minic_val_t sng_export_set_destination(minic_val_t *a, int n) {
+	const char *destination = minic_arg_p(a, n, 0);
+	context_t  *context     = script_get_context();
+	if (sng_is(destination, "disk")) {
+		context->layers_destination = EXPORT_DESTINATION_DISK;
+	}
+	else if (sng_is(destination, "project")) {
+		context->layers_destination = EXPORT_DESTINATION_PACK_INTO_PROJECT;
+	}
+	else {
+		return minic_val_int(0);
+	}
+	return minic_val_int(1);
+}
+
 // sng_export_set_name(name): the first part of the exported files' names (<name>_<preset texture>.png), which
 // ArmorPaint otherwise takes from the last project opened or saved through a dialog ("untitled" before that).
 static minic_val_t sng_export_set_name(minic_val_t *a, int n) {
@@ -799,10 +882,11 @@ static minic_val_t sng_export_name(minic_val_t *a, int n) {
 }
 
 // sng_export_textures(folder): export with the chosen preset, bit depth, format, layers and name, as the Export
-// window does (ArmorPaint writes the files during this call).
+// window does (ArmorPaint writes the files during this call). 0 when the folder isn't there (ArmorPaint would write
+// nothing and say nothing).
 static minic_val_t sng_export_textures(minic_val_t *a, int n) {
 	const char *folder = minic_arg_p(a, n, 0);
-	if (folder == NULL || folder[0] == '\0') {
+	if (folder == NULL || folder[0] == '\0' || !iron_is_directory((char *)folder)) {
 		return minic_val_int(0);
 	}
 	sng_fetch_presets();
@@ -812,6 +896,47 @@ static minic_val_t sng_export_textures(minic_val_t *a, int n) {
 	sng_gpu_t gpu = sng_gpu_begin();
 	export_texture_run((char *)folder, false);
 	sng_gpu_end(gpu);
+	return minic_val_int(1);
+}
+
+// ████ Textures and meshes ████
+
+// sng_asset_repoint(from, to): the texture the project reads from the file `from` is read from `to` instead, reloaded
+// in place, so the materials and layers using it keep it (File > Reimport Texture's own path, which ArmorPaint offers
+// only once the old file is gone). 0 when no texture is read from `from` or `to` isn't there. Like ArmorPaint's own
+// reimport, it pushes no history step.
+static minic_val_t sng_asset_repoint(minic_val_t *a, int n) {
+	const char *from    = minic_arg_p(a, n, 0);
+	const char *to      = minic_arg_p(a, n, 1);
+	project_t  *project = script_get_project();
+	if (from == NULL || to == NULL || to[0] == '\0' || !iron_file_exists((char *)to) || project == NULL || project->_ == NULL) {
+		return minic_val_int(0);
+	}
+	for (int i = 0; i < project->_->assets->length; ++i) {
+		asset_t *asset = project->_->assets->buffer[i];
+		if (sng_is(asset->file, from)) {
+			sng_gpu_t gpu = sng_gpu_begin();
+			project_reimport_texture_load(sng_copy(to), asset);
+			sng_gpu_end(gpu);
+			return minic_val_int(1);
+		}
+	}
+	return minic_val_int(0);
+}
+
+// sng_mesh_reimport(path): the project's mesh replaced by the one in `path`, its layers kept (File > Reimport Mesh's
+// path, without its window; upstream's own script functions either clear the layers or append). The new mesh should
+// keep the old one's UVs for the layers to fit, as with Reimport Mesh. 0 when `path` isn't there. No history step,
+// as upstream's.
+static minic_val_t sng_mesh_reimport(minic_val_t *a, int n) {
+	const char *path = minic_arg_p(a, n, 0);
+	if (path == NULL || path[0] == '\0' || !iron_file_exists((char *)path)) {
+		return minic_val_int(0);
+	}
+	sng_gpu_t gpu = sng_gpu_begin();
+	import_mesh_run(sng_copy(path), false, true, true); // layers kept, the mesh replaced, the camera kept
+	sng_gpu_end(gpu);
+	script_get_context()->ddirty = 2;
 	return minic_val_int(1);
 }
 
@@ -869,16 +994,97 @@ static const sng_binding_t sng_bindings[] = {
     {"sng_export_set_bits", "i(i)", sng_export_set_bits},
     {"sng_export_set_format", "i(p)", sng_export_set_format},
     {"sng_export_set_mode", "i(p)", sng_export_set_mode},
+    {"sng_export_format", "p()", sng_export_format},
+    {"sng_export_mode", "p()", sng_export_mode},
+    {"sng_export_destination", "p()", sng_export_destination},
+    {"sng_export_set_destination", "i(p)", sng_export_set_destination},
     {"sng_export_set_name", "i(p)", sng_export_set_name},
     {"sng_export_name", "p()", sng_export_name},
     {"sng_export_textures", "i(p)", sng_export_textures},
+    {"sng_asset_repoint", "i(p,p)", sng_asset_repoint},
+    {"sng_mesh_reimport", "i(p)", sng_mesh_reimport},
 };
 
 // ████ Defaults ████
 
+// A value of data/sng_keep.json, or NULL when it isn't there.
+static const char *sng_kept(any_map_t *keep, const char *name) {
+	const char *value = any_map_get(keep, (char *)name);
+	return value != NULL && value[0] != '\0' ? value : NULL;
+}
+
+static void sng_keep_number(any_map_t *keep, const char *name, float low, float high, f32 *f, i32 *i) {
+	const char *value = sng_kept(keep, name);
+	char       *end   = NULL;
+	if (value == NULL) {
+		return;
+	}
+	float number = strtof(value, &end);
+	if (end == value || *end != '\0' || number != number || number < low || number > high) {
+		return; // not a number, or outside what Preferences allows
+	}
+	if (f != NULL) {
+		*f = number;
+	}
+	else {
+		*i = (i32)number;
+	}
+	sng_kept_count++;
+}
+
+static void sng_keep_flag(any_map_t *keep, const char *name, bool *flag) {
+	const char *value = sng_kept(keep, name);
+	if (sng_is(value, "true") || sng_is(value, "false")) {
+		*flag = sng_is(value, "true");
+		sng_kept_count++;
+	}
+}
+
+// A keymap or theme name the member had: ArmorPaint's own ("default.json") or a preset file this build has.
+static bool sng_keep_preset(any_map_t *keep, const char *name, const char *folder, char **field) {
+	const char *value = sng_kept(keep, name);
+	if (value == NULL || strchr(value, '/') != NULL || strchr(value, '\\') != NULL) {
+		return false;
+	}
+	if (!sng_is(value, "default.json") && data_get_blob(string("%s/%s", folder, value)) == NULL) {
+		return false; // that preset isn't in this build: the layer's stays
+	}
+	*field = sng_copy(value);
+	sng_kept_count++;
+	return true;
+}
+
+// The preferences a member had in the build before this one. ArmorPaint reads its config.json by position and so
+// discards one written by another build, and each Singepaint version installs in a folder of its own: without this,
+// every update would start every preference again. When the previous version's config can't be copied as it is
+// (another upstream commit), Singerie's launcher writes the values below, by name, in data/sng_keep.json before the
+// first start; they are applied over the layer's defaults on that fresh config, and ArmorPaint then saves them in
+// its config.json as usual. Only these names are read; anything else in the file, or a value Preferences wouldn't
+// allow, is left out.
+static void sng_apply_kept(config_t *config) {
+	buffer_t *blob = data_get_blob(SNG_KEEP_FILE);
+	if (blob == NULL) {
+		return;
+	}
+	any_map_t *keep = json_parse_to_map(sys_buffer_to_string(blob));
+	data_delete_blob(SNG_KEEP_FILE);
+	if (sng_keep_preset(keep, "keymap", "keymap_presets", &config->keymap)) {
+		keymap_load();
+	}
+	sng_keep_preset(keep, "theme", "themes", &config->theme);
+	sng_keep_number(keep, "window_scale", 1.0f, 4.0f, &config->window_scale, NULL);
+	sng_keep_number(keep, "undo_steps", 1.0f, 64.0f, NULL, &config->undo_steps);
+	sng_keep_number(keep, "pressure_sensitivity", 0.0f, 10.0f, &config->pressure_sensitivity, NULL);
+	sng_keep_flag(keep, "pressure_radius", &config->pressure_radius);
+	sng_keep_flag(keep, "pressure_hardness", &config->pressure_hardness);
+	sng_keep_flag(keep, "pressure_angle", &config->pressure_angle);
+	sng_keep_flag(keep, "pressure_opacity", &config->pressure_opacity);
+}
+
 // On a fresh config (first start of this build, or after ArmorPaint discarded a config written by another build),
-// the layer's keymap and theme become the defaults. A config.json ArmorPaint read is never changed: whatever the
-// member chose stays. Nothing happens when the preset files aren't in data/.
+// the layer's keymap and theme become the defaults, then the preferences carried over from the build before
+// (data/sng_keep.json) go over them. A config.json ArmorPaint read is never changed: whatever the member chose stays.
+// Nothing happens when the preset files aren't in data/.
 static void sng_apply_defaults(void) {
 	if (config_loaded) {
 		return;
@@ -893,6 +1099,7 @@ static void sng_apply_defaults(void) {
 		config->theme        = sng_copy(SNG_DEFAULT_THEME); // base_init() loads it right after plugins_init()
 		sng_defaults_applied = true;
 	}
+	sng_apply_kept(config);
 }
 
 // ████ The shown name ████

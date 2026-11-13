@@ -8,8 +8,10 @@ It refuses a build that isn't one to give members: one made with MSVC (the scrat
 this repository's HEAD, one made from uncommitted changes. Then it writes, in `--out`:
 
 - `singepaint-<version with - for +>-win64.zip`: one folder holding the app (`ArmorPaint.exe`, `data/`, `license.md`,
-  `readme.txt`, `ALTERED_VERSION.txt`); a `config.json` or a `singerie/` session folder left in the build by a run
-  is left out, so a member's first start gets the layer's defaults;
+  `readme.txt`, `ALTERED_VERSION.txt`, `sng_files.json`): exactly the files the build laid out, as `sng_files.json`
+  lists them with their SHA-256. Anything a run of the build added since (a `config.json`, a `singerie/` session
+  folder, Singerie's plugin, a keymap a test edited is refused) is left out and said, so a member's first start gets
+  the layer's defaults and nothing a test left behind; a listed file that changed or went missing refuses the build;
 - `<zip>.sha256` (`<sha256>  <zip>`, as sha256sum writes it) and `<zip>.json`: what an admin enters in Singerie's
   Admin > Desktop app > Builds of our apps (app `armorpaint`, the version, the archive's name, size and SHA-256),
   plus the commits and the toolset.
@@ -33,7 +35,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,7 +44,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD = Path.home() / ".singerie" / "tools" / "armorpaint-layer-build" / "armorpaint"
-LEFT_OUT = ("config.json", "singerie")  # written by runs of the build, never shipped (data/config.json, sessions)
+FILES_LIST = "sng_files.json"  # written by build_windows.py in the app folder: every file it laid out, with its hash
 TAR = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"
 VERSION = re.compile(r"^\d+\.\d+\.\d+\+[A-Za-z0-9.-]+$")
 
@@ -91,7 +92,20 @@ def check_build(build: Path) -> tuple[str, str, str]:
     if git("status", "--porcelain", "--untracked-files=no"):
         raise Refused("The repository has uncommitted changes: commit them, build again, then package.")
     toolset = re.search(r"Built [0-9-]+ with (.+?)\.", note)
+    laid_out(build)  # refused here when the list is missing or a file changed
     return upstream, layer, toolset.group(1) if toolset else "clang"
+
+
+def laid_out(build: Path) -> list[str]:
+    """The files build_windows.py laid out (`sng_files.json`), each checked unchanged; Refused otherwise."""
+    try:
+        files = json.loads((build / FILES_LIST).read_text(encoding="utf-8"))["files"]
+    except (OSError, ValueError, KeyError):
+        raise Refused(f"The build has no {FILES_LIST} (made before the file list): build again.") from None
+    changed = [name for name, digest in files.items() if not (build / name).is_file() or sha256(build / name) != digest]
+    if changed:
+        raise Refused(f"Files of the build changed or went missing since it was made ({', '.join(changed[:5])}): build again.")
+    return sorted(files)
 
 
 def version_of(upstream: str, layer: str) -> str:
@@ -108,17 +122,15 @@ def version_of(upstream: str, layer: str) -> str:
     return version
 
 
-def pack(build: Path, archive: Path, folder: str) -> int:
-    """The build into `archive` under one folder; returns how many files went in."""
-    count = 0
+def pack(build: Path, archive: Path, folder: str) -> tuple[int, list[str]]:
+    """The files the build laid out (`sng_files.json`, and the list itself) into `archive` under one folder; returns
+    how many went in and the other files found in the build folder, left out."""
+    names = laid_out(build) + [FILES_LIST]
+    found = {path.relative_to(build).as_posix() for path in build.rglob("*") if path.is_file()}
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as out:
-        for path in sorted(build.rglob("*")):
-            relative = path.relative_to(build)
-            if relative.parts[0] in LEFT_OUT or relative.as_posix() == "data/config.json" or not path.is_file():
-                continue
-            out.write(path, f"{folder}/{relative.as_posix()}")
-            count += 1
-    return count
+        for name in names:
+            out.write(build / name, f"{folder}/{name}")
+    return len(names), sorted(found - set(names))
 
 
 def check_archive(archive: Path, folder: str) -> None:
@@ -150,7 +162,7 @@ def main() -> int:
         out.mkdir(parents=True, exist_ok=True)
         archive = out / f"{name}-win64.zip"
         archive.unlink(missing_ok=True)
-        files = pack(build, archive, name)
+        files, left_out = pack(build, archive, name)
         check_archive(archive, name)
     except (Refused, subprocess.CalledProcessError, OSError, ValueError) as exc:
         print(f"Not packaged: {exc}")
@@ -172,6 +184,8 @@ def main() -> int:
     }
     (out / f"{archive.name}.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"Packaged {archive} ({size / 1e6:.1f} MB, {files} files)\n  version {version}\n  SHA-256 {digest}")
+    if left_out:
+        print(f"  left out, not laid out by the build ({len(left_out)}): " + ", ".join(left_out[:10]))
     print("  unpacked with Windows' tar.exe and started once (--api lists the sng_* functions): ok")
     return 0
 

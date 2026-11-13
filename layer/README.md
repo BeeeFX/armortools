@@ -23,6 +23,8 @@ Singerie's own repository (`plugins/armorpaint`). This repository holds only cha
 | `native/sng_build.h` | What is being built (the build tool rewrites it in its copy) |
 | `patches/` | Core patches: one, putting back the external hook upstream removed on 22 October 2026 (`patches/README.md` has the budget) |
 | `tools/build_windows.py` | Builds ArmorPaint with the layer on Windows |
+| `tools/package_windows.py` | Packs a members' build (only the files the build laid out) |
+| `tools/watch.py` | Checks, then follows, upstream's newest commit |
 | `tests/smoke/` | The smoke test, its minic scripts and the script API snapshot |
 | `GAPS.md` | Painter features ArmorPaint misses, ranked, with their route; upstream pull request ideas |
 | `LICENSE.md` | zlib, the licence of the layer's own files |
@@ -34,14 +36,17 @@ python layer/tools/build_windows.py            # into ~/.singerie/tools/armorpai
 python layer/tools/build_windows.py --into D:/b # elsewhere
 ```
 
-It needs Visual Studio 2022 with "Desktop development with C++" and Python 3.10+; nothing is downloaded. It never
+It needs Visual Studio 2022 with "Desktop development with C++" and Python 3.11+; nothing is downloaded. It never
 writes inside the repository: it copies `base/` and `paint/` to `<into>/src`, applies the core patches `patches/series`
 lists to that copy, lays `layer/native/` out as `paint/plugins/external/` there (with the patched hook, the project
 compiles that folder in when it exists, defines `WITH_EXTERNAL` and calls its `external_init()` from
-`plugins_init()`; upstream's `.gitignore` lists the folder), runs upstream's `amake`,
-builds Release x64 with MSBuild, then lays the app out in `<into>/armorpaint/` with the layer's data files merged
-into `data/`, the layer's licence in `data/licenses/singerie_layer.md` and `ALTERED_VERSION.txt` saying plainly that
-it is an altered ArmorPaint (zlib licence, point 2). The About box shows `<upstream>+sng.<layer>` as the commit.
+`plugins_init()`; the folder exists only in the copy), runs upstream's `amake` (only the one whose SHA-256
+`upstream.toml` pins as `amake_sha256`: another one stops the build until a person has read what changed and passes
+`--accept-tools`), builds Release x64 with MSBuild, then lays the app out in `<into>/armorpaint/` with the layer's
+data files merged into `data/`, the layer's licence in `data/licenses/singerie_layer.md`, `ALTERED_VERSION.txt` saying
+plainly that it is an altered ArmorPaint (zlib licence, point 2) and that its problems go to the collective, not to
+ArmorPaint's author, and `sng_files.json`, every file it laid out with its SHA-256. The About box shows
+`<upstream>+sng.<layer>` as the commit.
 Before building, it checks that the few internals the bindings declare by hand still match upstream's definitions
 (a C declaration that no longer matches would still link), and after, that the repository is unchanged.
 
@@ -58,7 +63,7 @@ cast, and the two variable-length arrays of the colour ramp and vector curves no
 change nothing ArmorPaint does, are never committed, and such a build is for tests only (`ALTERED_VERSION.txt` says
 so). The layer's own code is portable C and needs none of them; the build refuses it if it ever does.
 
-Logs go to `<into>/logs/` (`amake.log`, `msbuild.log`). A build takes about 15 seconds.
+Logs go to `<into>/logs/` (`amake.log`, `msbuild.log`). MSBuild takes about half a minute.
 
 ## Packaging a members' build
 
@@ -69,8 +74,10 @@ python layer/tools/package_windows.py --out <folder>
 
 `package_windows.py` packs a clang build of the repository's current commit as the archive Singerie's software
 manager installs, and refuses anything else (an MSVC scratch build, a build of another commit, uncommitted changes).
-It writes `singepaint-<version>-win64.zip` (one folder holding the app; a `config.json` or session folder a run left
-in the build stays out, so a member's first start gets the layer's defaults), `<zip>.sha256`, and `<zip>.json` with
+It writes `singepaint-<version>-win64.zip` (one folder holding exactly the files the build laid out, as its
+`sng_files.json` lists them: whatever a run left in the build since, a `config.json`, a session folder, Singerie's
+plugin laid out by its test suite, stays out and is listed, so a member's first start gets the layer's defaults and
+nothing a test left behind; a listed file that changed refuses the package, named), `<zip>.sha256`, and `<zip>.json` with
 what an admin enters in Singerie's Admin › Desktop app › Builds of our apps (app `armorpaint`, version, archive name,
 size, SHA-256, plus the commits and toolset). It then unpacks the archive with Windows' own `tar.exe`, as the
 software manager does, and starts the app once (`--api` must list the `sng_*` functions).
@@ -92,9 +99,10 @@ python layer/tests/smoke/smoke.py --static     # only the checks that need no bu
 
 Without a build, against this tree's upstream sources: the theme has ArmorPaint's fields in their order (its theme
 reader is positional, not by name); the keymap names only actions ArmorPaint has (an upstream rename would silently
-drop a shortcut) and gives no plain key to two actions (ArmorPaint would fire both); the export presets have
-upstream's shape, only channels ArmorPaint exports, and names that say their colour space; no layer file replaces
-an upstream one.
+drop a shortcut) and gives no shortcut, modifiers included, to two actions (ArmorPaint would fire both); the export
+presets have upstream's shape, only channels ArmorPaint exports, and names that say their colour space; no layer file
+replaces an upstream one; `upstream.toml`'s `amake_sha256` is this tree's build tool, and the build refuses another
+without `--accept-tools`; packaging takes only the files a build laid out (on stand-in files).
 
 With the build, each part in a fresh copy of its folder:
 
@@ -102,15 +110,21 @@ With the build, each part in a fresh copy of its folder:
 - **the name**: the title bar says `untitled - Singepaint (based on ArmorPaint)` from the start, and
   `untitled* - Singepaint (based on ArmorPaint)` once a change marks the project unsaved;
 - **the defaults**: a first start writes the Painter keymap and theme in ArmorPaint's `data/config.json`; a config
-  with the member's own choice keeps it;
+  with the member's own choice keeps it; a fresh config with a `data/sng_keep.json` takes the preferences it carries
+  (a keymap name, the UI scale, undo steps, pen pressure) and leaves out a preset this build lacks, a value out of
+  range and an unknown name;
 - **`--api`**: all `sng_*` functions registered, and ArmorPaint's own script API (its functions, structs, enums,
   globals and material nodes, 1064 entries at the pinned commit) compared with `tests/smoke/api_snapshot.h`: an
   upstream rename, removal or new parameter is listed by name;
 - **the bindings** (`tests/smoke/scripts/bindings.c`, run with `--background --script`): every `sng_*` function on
   a fresh project (a merge, a paint layer renamed, faded, blended, hidden then shown through undo and redo, a fill
   layer moved and the move undone and redone, black and white masks, a group, a duplicate deleted, a mask inverted
-  and another applied, bake settings, refusals), then an export with the studio preset: nine 2048-pixel PNGs named
-  `smoke_basecolor_srgb.png`, `smoke_normal_raw.png`...
+  and another applied, bake settings, the Export window read back and set, refusals), then exports: the studio
+  preset, nine 2048-pixel PNGs named `smoke_basecolor_srgb.png`, `smoke_normal_raw.png`...; the packed preset; and
+  the studio preset at 16 bits, nine EXRs. **What the pictures hold** is checked from one pixel each, decoded with the
+  standard library: the packed `orm_raw` must be the occlusion, roughness and metallic maps in red, green and blue,
+  both presets the same base colour, and an unpainted height map 0 (ArmorPaint's flat, which Singerie's material build
+  reads as Midlevel 0): a channel swapped in a preset, or one upstream changed the meaning of, fails.
 
 Singerie's pipeline plugin has its own real-app test (`plugins/armorpaint/tests/run_tests.py --armorpaint
 <folder>` in Singerie's repository); it runs against this build like against a plain one.
@@ -135,9 +149,10 @@ Shortcuts); nothing else of Painter is used.
 | Decal mask | Ctrl | **Shift** | (none; Ctrl now drags opacity) |
 | Paint, eraser, projection (decal), polygon fill, smudge (blur), clone | B, E, D, G, U, L | **1, 2, 3, 4, 5, 6** | 1 to 6 |
 | Colour picker | V | **P** | P (pick the stroke's material) |
-| Particle, Colour ID, Select tools | P, C, M | **none** (the toolbar) | Painter's Ctrl+1 can't be told from 1 by ArmorPaint |
+| Particle, Colour ID, Select tools | P, C, M | **7, 8, 9** | (Painter's tools stop at 6; the next numbers) |
 | Frame the mesh | 0 | **F** | F (centre the mesh) |
-| Front, back, side, top views; orbit steps | numbers and Ctrl+numbers | **none** (the View menu) | the number keys are tools |
+| Front, back, right, left, top, bottom views | 1, Ctrl+1, 3, Ctrl+3, 7, Ctrl+7 | **Ctrl+1, Ctrl+Shift+1, Ctrl+3, Ctrl+Shift+3, Ctrl+7, Ctrl+Shift+7** | the number keys are tools; ArmorPaint tells 1 from Ctrl+1 |
+| Orbit steps (left, right, up, down, opposite) | 4, 6, 8, 2, 9 | **Ctrl+4, Ctrl+6, Ctrl+8, Ctrl+2, Ctrl+9** | the same keys with Ctrl |
 | Perspective / orthographic | 5 | **F6** | F5 / F6 (F5 is ArmorPaint's player, hard-wired) |
 | Hide the interface | F11 | **Tab** | Tab |
 | 2D view, node editor | Shift+Tab, Tab | **F1, F7** | F1: the 3D/2D layout; Painter has no node editor, and F7 is the one F key it leaves free |
@@ -148,9 +163,12 @@ Shortcuts); nothing else of Painter is used.
 
 Keys ArmorPaint's own panels read directly (F2 renames in the Layers and Meshes tabs, F5 refreshes the browser) are never given to a keymap action: both would fire. The node editor was on F2 until 1 November 2026, when upstream's rename came; the smoke test now fails a preset that takes one of those keys.
 
+A shortcut fires only with exactly its modifiers held (`keymap_shortcut` in `paint/sources/keymap.c` at the pin):
+`1` and `Ctrl+1` are two shortcuts, so the views have Ctrl+numbers while the tools have the numbers. Until 12 November
+2026 this page said a key without modifiers also fired with them, and the views and three tools had no shortcut.
+
 Known limits, all in ArmorPaint's input code (so not fixable from the layer without a core patch): a brush drag
-changes one value, horizontally only; a shortcut without modifiers also fires with them (which is why views can't
-move to Ctrl+numbers while tools are on the numbers); the distraction-free toggle isn't guarded against typing, so
+changes one value, horizontally only; the distraction-free toggle isn't guarded against typing, so
 Tab typed in a text field hides the interface; F5 always starts ArmorPaint's player. Painter's Delete, Ctrl+D and
 Ctrl+G for layers have no ArmorPaint action (GAPS.md, item 6). These bindings were reasoned from ArmorPaint's input
 code and checked to load; they haven't been tried by hand in the window yet.
@@ -180,10 +198,22 @@ viewport `ff3a3a3a`. It is our own palette, inspired by the look of Painter's da
 On a fresh config (`config.json` absent, or one ArmorPaint discarded), the native module makes the Painter keymap
 and theme the defaults before ArmorPaint's interface starts; ArmorPaint then saves them in `data/config.json` as
 usual. A config ArmorPaint read is never changed: a member who chooses another keymap or theme in Preferences keeps
-it. Two ArmorPaint behaviours to know: it **discards its config whenever the build's commit changes** (so after
-each update of the collective's build, every preference, ours included, starts again from the defaults: a candidate
-upstream change, GAPS.md), and editing shortcuts in Preferences writes them into the selected preset's own file
-(`data/keymap_presets/painter.json` in the install).
+it. Two ArmorPaint behaviours to know: it **discards its config whenever the build's commit changes** (it reads the
+file by position, so a config of another build could be misread), and editing shortcuts in Preferences writes them
+into the selected preset's own file (`data/keymap_presets/painter.json` in the install). Each Singepaint version also
+installs in a folder of its own, so a new version starts with no config at all.
+
+**Preferences carried over to a new version.** Singerie's launcher does it before a new version's first start
+(Singerie's `app/src-tauri/src/launch/armorpaint.rs`, `carry_over_preferences`), from the installed version whose
+`config.json` was used last: when both builds are of **the same upstream commit** (the part before `+sng.`), the
+config is copied whole, its `sha` rewritten to the new build's, which ArmorPaint then accepts; when the upstream
+commit differs, the copy would be misread, so the launcher writes a few preferences **by name** in
+`data/sng_keep.json` and the native module applies them on that fresh config, over the layer's defaults
+(`sng_apply_kept`): `keymap` and `theme` (ArmorPaint's own `default.json` or a preset this build has),
+`window_scale` (1 to 4), `undo_steps` (1 to 64), `pressure_sensitivity` (0 to 10), `pressure_radius`,
+`pressure_hardness`, `pressure_angle`, `pressure_opacity` (true or false). Other names, and values Preferences
+wouldn't allow, are left out; `sng_info("carried")` says how many were taken. Keymap and theme presets the member
+made, or edited (their file differs from the one the old build laid out, by `sng_files.json`), are copied too.
 
 ## The studio export presets
 
@@ -202,17 +232,24 @@ the Export window still starts on `generic`. A plugin chooses a preset with `sng
 
 ## The sng_* functions
 
-Registered for every minic script and plugin by `native/sng_bindings.c` (48 at API level 1). Conventions: slots
+Registered for every minic script and plugin by `native/sng_bindings.c` (54 at API level 1). Conventions: slots
 (layers, masks, groups, filters: ArmorPaint keeps them in one stack) are named by **id** (`-1` for none) and placed
 by **index** (0 at the bottom); every change pushes ArmorPaint's own history step, as the Layers tab does, so Ctrl+Z
 undoes it; an `int` result is 1 for done and 0 for refused unless it returns an id; returned text is never freed.
 Creating a layer or a mask finishes within the call (the Layers tab clears it on the next frame), so a script can
-use or delete it at once.
+use or delete it at once. `sng_layer_new_fill` pushes two history steps, "New Layer" then "To Fill Layer", as the
+Layers tab does over two frames: Ctrl+Z twice takes it away.
+
+**A plugin that must load in older builds too** (Singerie's pipeline plugin, which members may run with a Singepaint
+made before a function existed): minic compiles a whole plugin before running any of it, so a plugin naming a
+function the build lacks doesn't load at all, whatever branch the call is in. Such a plugin reads newer values through
+`sng_info`, which every build has and which answers `""` to a word it doesn't know (`export_mode`, `export_format`,
+`export_destination`, `carried`), and calls only functions every build it meets has.
 
 | Function | What |
 |---|---|
 | `char *sng_version()`, `int sng_api_level()` | `sng 0.1.0 (api 1, layer …, ArmorPaint …, built …)`; the level rises only when a function changes meaning |
-| `char *sng_info(char *what)` | `name` ("Singepaint (based on ArmorPaint)"), `upstream`, `layer`, `built`, `keymap`, `theme`, `defaults` (`applied` or `kept` this start) |
+| `char *sng_info(char *what)` | `name` ("Singepaint (based on ArmorPaint)"), `upstream`, `layer`, `built`, `keymap`, `theme`, `defaults` (`applied` or `kept` this start), `carried` (preferences `data/sng_keep.json` gave this start), `export_mode`, `export_format`, `export_destination`; `""` for a word it doesn't know |
 | `char *sng_getenv(char *name)` | An environment variable, `""` when unset (minic has no getenv) |
 | `int sng_redraw()` | Redraw the whole interface |
 | `int sng_layer_count()`, `int sng_layer_at(int index)`, `int sng_layer_index(int id)` | The stack |
@@ -230,12 +267,16 @@ use or delete it at once.
 | `int sng_mask_invert(int id)`, `int sng_mask_apply(int id)` | |
 | `int sng_history_count()`, `int sng_history_redo_count()`, `char *sng_history_step(int back)` | Steps Ctrl+Z can undo and redo; a step's name (0: the last done, -1: the next redo) |
 | `int sng_history_undo()`, `int sng_history_redo()` | |
-| `float sng_bake_get(char *setting)`, `int sng_bake_set(char *setting, float value)` | The settings every Bake Texture node shares: `samples`, `ao_strength`, `ao_radius`, `ao_offset`, `curv_strength`, `curv_radius`, `curv_offset`, `curv_smooth`, `high_poly`, `axis`, `up_axis` |
+| `float sng_bake_get(char *setting)`, `int sng_bake_set(char *setting, float value)` | The settings every Bake Texture node shares: `samples`, `ao_strength`, `ao_radius`, `ao_offset`, `curv_strength`, `curv_radius`, `curv_offset`, `curv_smooth`, `high_poly`, `axis`, `up_axis`; refused: a NaN, `samples` below 1, a `high_poly` that isn't one of the project's meshes, an axis out of range |
 | `int sng_export_preset_count()`, `char *sng_export_preset_at(int i)`, `char *sng_export_preset()`, `int sng_export_set_preset(char *name)` | The Export window's preset |
 | `int sng_export_bits()`, `int sng_export_set_bits(int bits)` | 8, 16 or 32 (the project's bit depth, as the Export window's Color) |
 | `int sng_export_set_format(char *format)`, `int sng_export_set_mode(char *mode)` | `png` or `jpg`; `visible`, `selected`, `per_object`, `per_udim_tile` |
+| `char *sng_export_format()`, `char *sng_export_mode()` | What the Export window says now, to put it back after an export of one's own |
+| `char *sng_export_destination()`, `int sng_export_set_destination(char *destination)` | `disk` (files in the folder) or `project` (packed into the project, nothing written), as the Export window's Destination |
 | `int sng_export_set_name(char *name)`, `char *sng_export_name()` | The files' first part (ArmorPaint otherwise uses the last project opened through a dialog, or "untitled") |
-| `int sng_export_textures(char *folder)` | Export now, with all of the above |
+| `int sng_export_textures(char *folder)` | Export now, with all of the above; 0 when the folder isn't there |
+| `int sng_asset_repoint(char *from, char *to)` | The texture read from the file `from` is read from `to` instead, reloaded in place (materials and layers keep it); no history step, like ArmorPaint's own reimport |
+| `int sng_mesh_reimport(char *path)` | The project's mesh replaced by `path`, its layers kept (File › Reimport Mesh without its window: the new mesh should keep the UVs); no history step |
 
 Plugins should call `sng_*` functions plus a short list of upstream's own, so that an upstream change is fixed once,
 in the bindings. minic's limits still apply to plugins: 32 functions, 64 globals, an 8 MB arena, no preprocessor;
@@ -244,7 +285,9 @@ in the bindings. minic's limits still apply to plugins: 32 functions, 64 globals
 ## Keeping up with upstream
 
 The layer follows upstream ArmorPaint's `main` **weekly, once the smoke test passes** (Baptiste, 5 October 2026).
-GitHub Actions are off on this repository, so the watch runs from a PC that can build (Visual Studio 2022):
+GitHub Actions are off on this repository, so the watch runs from a PC that can build (Visual Studio 2022). The
+check runs by itself; **following (`--apply`) is a person's step, after reading the report**: upstream's tree carries
+the programs the build runs (its `amake`), and a follow moves members' builds to whatever upstream pushed.
 
 ```bash
 python layer/tools/watch.py --singerie <Singerie's repository>                  # check: nothing changes
@@ -255,9 +298,12 @@ It fetches upstream; if `main` moved past the pin, it builds the layer on upstre
 worktree, runs the smoke test (new upstream API entries pass; removed or changed ones fail and are named) and, with
 `--singerie`, Singerie's pipeline plugin test (`plugins/armorpaint/tests/run_tests.py`) on that build, then writes
 `watch-report.md` beside the build (`~/.singerie/tools/armorpaint-layer-watch`): the upstream commits since the
-pin, each step's result, the API's new entries. With `--apply`, and only when every step passed, it fast-forwards
+pin, **every program or library upstream changed** (`base/tools/bin`, `*.exe`, `*.dll`, `*.lib`), each step's result,
+the API's new entries. When upstream changed its build tool, the build refuses it (its SHA-256 isn't
+`upstream.toml`'s `amake_sha256`) and the watch can't pass: read what changed, then run it again with
+`--accept-tools`. With `--apply`, and only when every step passed, it fast-forwards
 `main` to upstream, merges `main` into `sng/main` (no conflict is possible: the layer's files are all in `layer/`),
-sets the pin in `upstream.toml`, writes the new `api_snapshot.h`, and commits (a core patch can still stop applying to
+sets the pin in `upstream.toml` (and the build tool's hash), writes the new `api_snapshot.h`, and commits (a core patch can still stop applying to
 a new upstream commit: the build then fails, and nothing changes); `--push` pushes both branches
 (never forced). It needs `sng/main` checked out with nothing uncommitted. `--trailer "Key: value"` adds a line to
 its commits.
