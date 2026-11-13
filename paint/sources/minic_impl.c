@@ -616,10 +616,6 @@ buffer_t *script_get_texture_pixels(gpu_texture_t *texture) {
 	return b;
 }
 
-bool tab_layers_can_delete(slot_layer_t *l);
-void tab_layers_delete_layer(slot_layer_t *l);
-void base_init_undo_layers();
-
 static bool script_layer_valid(slot_layer_t *l) {
 	return l != NULL && g_project != NULL && g_project->_ != NULL && array_index_of(g_project->_->layers, l) >= 0;
 }
