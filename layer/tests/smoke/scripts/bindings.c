@@ -162,7 +162,7 @@ void main() {
 	put("kind_group", sng_layer_kind(group_id));
 	put_i("parent_paint_is_group", sng_layer_parent(paint_id) == group_id);
 	put("history_after_group", sng_history_step(0));
-	put_i("group_refused", sng_layer_group(paint_id));
+	put_i("group_refused", sng_layer_group(-5));
 	dup_id = sng_layer_duplicate(fill_id);
 	put("kind_dup", sng_layer_kind(dup_id));
 	put_i("dup_is_new", dup_id != fill_id);

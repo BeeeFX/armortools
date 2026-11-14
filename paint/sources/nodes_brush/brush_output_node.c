@@ -56,7 +56,7 @@ void brush_output_node_parse_inputs() {
 		}
 	}
 	else {
-		g_context->brush_nodes_opacity = opac->_f32;
+		g_context->brush_nodes_opacity = math_max(0.0, math_min(1.0, opac->_f32));
 		g_context->brush_mask_image    = NULL;
 	}
 
@@ -119,6 +119,10 @@ void brush_output_node_run() {
 
 	// Paint bounds
 	if (g_context->paint_vec.x < left || g_context->paint_vec.x > right || g_context->paint_vec.y < top || g_context->paint_vec.y > bottom) {
+		return;
+	}
+
+	if (args_player) {
 		return;
 	}
 

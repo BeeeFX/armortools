@@ -275,6 +275,11 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 		node_shader_write_vert(kong, string_tmp("output.select_uv = %s;", tuv));
 	}
 
+	if (context_is_pixel_snap()) {
+		node_shader_add_out(kong, "float2 pixel_uv");
+		node_shader_write_vert(kong, string_tmp("output.pixel_uv = %s;", tuv));
+	}
+
 	bool decal_layer = g_context->layer->fill_material != NULL && g_context->layer->uv_type == UV_TYPE_PROJECT;
 	if (decal_layer) {
 		node_shader_add_constant(kong, "float4x4 WVP", "_decal_layer_matrix");
@@ -306,14 +311,10 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 
 	// Select tool mask
 	if (g_context->select_active && g_context->select_2d) {
-		node_shader_add_constant(kong, "float4 select_mask", "_select_mask");
-		node_shader_write_frag(kong, "if (input.select_uv.x < constants.select_mask.x || input.select_uv.x > constants.select_mask.z || input.select_uv.y < "
-		                             "constants.select_mask.y || input.select_uv.y > constants.select_mask.w) { discard; }");
+		util_select_shader_mask(kong, "input.select_uv");
 	}
 	else if (g_context->select_active) {
-		node_shader_add_constant(kong, "float4 select_mask", "_select_mask");
-		node_shader_write_frag(kong, "if (sp.x < constants.select_mask.x || sp.x > constants.select_mask.z || sp.y < constants.select_mask.y || sp.y > "
-		                             "constants.select_mask.w) { discard; }");
+		util_select_shader_mask(kong, "sp.xy");
 	}
 
 	node_shader_add_texture(kong, "gbufferD", NULL);
@@ -382,8 +383,12 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 		}
 	}
 
-	if (g_context->picker_paint_mask) {
+	if (g_context->picker_material_mask) {
 		make_discard_material_id(kong, NULL);
+	}
+
+	if (g_context->picker_color_mask) {
+		make_discard_picked_color(kong, tex_src, tex_src_link);
 	}
 
 	make_texcoord_run(kong, is_atlas);
@@ -538,6 +543,9 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 		node_shader_write_frag(kong, "else {");
 		node_shader_write_frag(kong, "pa_mask = float2(dot(pa_mask_3d, mt), dot(pa_mask_3d, mb));");
 		node_shader_write_frag(kong, "}");
+		if (context_is_pixel_snap()) {
+			node_shader_write_frag(kong, "pa_mask = pixel_pa;");
+		}
 		if (g_context->brush_directional) {
 			node_shader_add_constant(kong, "float3 brush_direction", "_brush_direction");
 			node_shader_write_frag(kong, "if (constants.brush_direction.z == 0.0) { discard; }");
@@ -594,7 +602,7 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 	node_shader_write_frag(kong, string_tmp("float4 sample_undo = sample_lod(%s, sampler_linear, sample_tc, 0.0);", tex_src));
 
 	f32 matid = g_context->material->id / 255.0;
-	if (g_context->picker_paint_mask) {
+	if (g_context->picker_material_mask) {
 		matid = g_context->materialid_picked / 255.0; // Keep existing material id in place when mask is set
 	}
 	char *matid_string = parser_material_vec1(matid * 3.0);
@@ -706,7 +714,9 @@ node_shader_context_t *make_paint_run_context(material_t *data, char *context_id
 	parser_material_triplanar          = false;
 	parser_material_sample_keep_aspect = false;
 
-	sculpt_make_paint_run(kong);
+	if (!g_context->material_preview) {
+		sculpt_make_paint_run(kong);
+	}
 
 	con_paint->data->shader_from_source = true;
 	make_paint_create_shaders(node_shader_get(kong), &con_paint->data->vertex_shader, &con_paint->data->fragment_shader,

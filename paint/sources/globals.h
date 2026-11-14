@@ -6,9 +6,9 @@
 #include <iron.h>
 
 char *manifest_title           = "ArmorPaint";
-char *manifest_version         = "1.1alpha";
-char *manifest_version_project = "22";
-char *manifest_version_config  = "1";
+char *manifest_version         = "1.1rc2";
+char *manifest_version_project = "23";
+char *manifest_version_config  = "4";
 char *manifest_url             = "https://armorpaint.org";
 char *manifest_url_android     = "https://play.google.com/store/apps/details?id=org.armorpaint";
 char *manifest_url_ios         = "https://apps.apple.com/app/armorpaint/id1533967534";
@@ -215,7 +215,6 @@ f32                       ui_view2d_pan_x            = 0.0;
 f32                       ui_view2d_pan_y            = 0.0;
 f32                       ui_view2d_pan_scale        = 1.0;
 bool                      ui_view2d_tiled_show       = false;
-bool                      ui_view2d_grid_redraw      = true;
 sound_t                  *ui_view2d_sound_playing    = NULL;
 bool                      player_running             = false;
 bool                      player_in_editor           = false;
@@ -330,6 +329,8 @@ ui_node_t_array_t    *nodes_mesh_input;
 ui_node_t_array_t    *nodes_mesh_modifier;
 ui_node_t_array_t    *nodes_mesh_combine;
 ui_node_t_array_t    *nodes_mesh_utilities;
+ui_node_t_array_t    *nodes_mesh_group;
+ui_node_t            *nodes_mesh_group_def;
 node_list_t_array_t  *nodes_mesh_list = NULL;
 ui_node_t            *nodes_mesh_input_def;
 ui_node_t            *nodes_mesh_output_def;
@@ -341,12 +342,15 @@ mesh_nodes_t         *nodes_mesh_eval_slot;
 mesh_object_t        *nodes_mesh_eval_object;
 bool                  nodes_mesh_eval_unwrap;
 i32                   nodes_mesh_vector_socket; // Output socket of the node evaluated by nodes_mesh_vector
+i32                   nodes_mesh_eval_socket;
+u32                   nodes_mesh_eval_group_key = 0;
 bool                  nodes_mesh_script_running = false;
 bool                  nodes_mesh_eval_reads_frame;
 i32                   make_mesh_layer_pass_count = 1;
 
-i32             ui_sidebar_default_w_mini = 56;
-i32             ui_sidebar_default_w_full = 280;
+i32             ui_sidebar_default_w_mini  = 56;
+i32             ui_sidebar_default_w_full  = 280;
+i32             ui_sidebar_default_w_large = 295;
 i32             ui_sidebar_default_w;
 ui_window_t    *ui_sidebar_hminimized;
 i32             ui_sidebar_w_mini;

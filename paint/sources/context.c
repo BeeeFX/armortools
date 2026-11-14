@@ -71,8 +71,10 @@ void context_init() {
 	g_context->uvx_picked                   = 0.0;
 	g_context->uvy_picked                   = 0.0;
 	g_context->picker_select_material       = false;
-	g_context->picker_paint_mask            = false;
-	g_context->picker_viewport_mask         = false;
+	g_context->picker_material_mask         = false;
+	g_context->picker_color_mask            = false;
+	g_context->picker_color_mask_tolerance  = 0.0;
+	g_context->picker_hide_other_materials  = false;
 	g_context->pick_pos_nor_tex             = false;
 	g_context->pick_object_id               = false;
 	g_context->posx_picked                  = 0.0;
@@ -85,6 +87,7 @@ void context_init() {
 	g_context->draw_texels                  = false;
 	g_context->colorid                      = 0;
 	g_context->colorid_picked               = false;
+	g_context->colorid_picked_color         = 0xff000000;
 	g_context->layers_export                = EXPORT_MODE_VISIBLE;
 	g_context->decal_preview                = false;
 	g_context->decal_x                      = 0.0;
@@ -130,6 +133,13 @@ void context_init() {
 	g_context->brush_stencil_scaling        = false;
 	g_context->brush_stencil_angle          = 0.0;
 	g_context->brush_stencil_rotating       = false;
+	g_context->view_image                   = NULL;
+	g_context->view_image_x                 = 0.5;
+	g_context->view_image_y                 = 0.5;
+	g_context->view_image_scale             = 0.5;
+	g_context->view_image_angle             = 0.0;
+	g_context->view_image_opacity           = 0.5;
+	g_context->view_image_action            = 0;
 	g_context->brush_nodes_scale            = 1.0;
 	g_context->brush_nodes_angle            = 0.0;
 	g_context->brush_nodes_hardness         = 1.0;
@@ -173,9 +183,8 @@ void context_init() {
 	g_context->project_type                 = -1;
 }
 
-bool context_use_deferred() {
-	return g_config->render_mode != RENDER_MODE_FORWARD &&
-	       (g_context->viewport_mode == VIEWPORT_MODE_LIT || g_context->viewport_mode == VIEWPORT_MODE_PATH_TRACE) && g_context->tool != TOOL_TYPE_COLORID;
+bool context_use_lit() {
+	return (g_context->viewport_mode == VIEWPORT_MODE_LIT || g_context->viewport_mode == VIEWPORT_MODE_PATH_TRACE) && g_context->tool != TOOL_TYPE_COLORID;
 }
 
 void context_select_material(i32 i) {
@@ -408,6 +417,10 @@ bool context_in_nodes() {
 	return ui_nodes_show && mouse_x > ui_nodes_wx && mouse_x < ui_nodes_wx + ui_nodes_ww && mouse_y > ui_nodes_wy && mouse_y < ui_nodes_wy + ui_nodes_wh;
 }
 
+bool context_is_pixel_snap() {
+	return g_config->pixel_snap && !context_is_decal() && !slot_layer_is_path(g_context->layer);
+}
+
 bool context_is_decal() {
 	return g_context->tool == TOOL_TYPE_DECAL || g_context->tool == TOOL_TYPE_TEXT;
 }
@@ -443,22 +456,16 @@ void context_set_viewport_mode(viewport_mode_t mode) {
 	viewport_mode_t prev_viewport_mode = g_context->viewport_mode;
 	g_context->viewport_mode           = mode;
 
-	if (context_use_deferred()) {
-		render_path_commands = render_path_deferred_commands;
+	if (context_use_lit()) {
+		render_path_commands = render_path_lit_commands;
 	}
 	else {
-		render_path_commands = render_path_forward_commands;
+		render_path_commands = render_path_unlit_commands;
 	}
 	make_material_parse_mesh_material();
 
 	if (g_context->viewport_mode == VIEWPORT_MODE_PATH_TRACE) {
 		util_mesh_visibility_changed();
-	}
-
-	// Rotate mode is not supported for path tracing yet
-	if (g_context->viewport_mode == VIEWPORT_MODE_PATH_TRACE && g_context->camera_controls == CAMERA_CONTROLS_ROTATE) {
-		g_context->camera_controls = CAMERA_CONTROLS_ORBIT;
-		viewport_reset();
 	}
 
 	// Bake in lit mode for now
@@ -545,11 +552,11 @@ void context_set_render_path_on_next_frame(void *_) {
 }
 
 void context_set_render_path() {
-	if (context_use_deferred()) {
-		render_path_commands = render_path_deferred_commands;
+	if (context_use_lit()) {
+		render_path_commands = render_path_lit_commands;
 	}
 	else {
-		render_path_commands = render_path_forward_commands;
+		render_path_commands = render_path_unlit_commands;
 	}
 	sys_notify_on_next_frame(&context_set_render_path_on_next_frame, NULL);
 }

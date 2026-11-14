@@ -9,8 +9,8 @@
 typedef struct slot_brush {
 	struct ui_nodes       *nodes;
 	struct ui_node_canvas *canvas;
-	struct gpu_texture    *image;      // 200px
-	struct gpu_texture    *image_icon; // 50px
+	struct gpu_texture    *image; // 200px
+	struct gpu_texture    *image_icon;
 	struct gpu_texture    *image_wave; // Stroke preview, generated at runtime
 	bool                   preview_ready;
 	i32                    id;
@@ -183,11 +183,13 @@ typedef struct config {
 	bool                 experimental;
 	i32                  neural_res;
 	i32                  console_model;
-	render_mode_t        render_mode;
 	tools_t              tools;
 	bool                 view2d_grid_show;
 	i32                  view2d_grid_cell;
 	bool                 view2d_grid_snap;
+	bool                 pixel_snap;
+	bool                 large_asset_previews;
+	bool                 tooltips;
 } config_t;
 
 typedef struct slot_material {
@@ -341,6 +343,7 @@ typedef struct context {
 	struct gpu_texture         *mask_preview_rgba32;
 	struct slot_layer          *mask_preview_last;
 	bool                        colorid_picked;
+	u32                         colorid_picked_color;
 	bool                        colorid_viewport_mask;
 	bool                        material_preview;
 	mat4_t                      saved_camera;
@@ -349,8 +352,10 @@ typedef struct context {
 	f32                         uvx_picked;
 	f32                         uvy_picked;
 	bool                        picker_select_material;
-	bool                        picker_paint_mask;
-	bool                        picker_viewport_mask;
+	bool                        picker_material_mask;
+	bool                        picker_color_mask;
+	f32                         picker_color_mask_tolerance;
+	bool                        picker_hide_other_materials;
 	bool                        pick_pos_nor_tex;
 	bool                        pick_object_id;
 	f32                         posx_picked;
@@ -377,6 +382,12 @@ typedef struct context {
 	f32                         select_y1;
 	f32                         select_x2;
 	f32                         select_y2;
+	select_mode_t               select_mode;
+	f32_array_t                *select_points;
+	f32                         select_cursor_x;
+	f32                         select_cursor_y;
+	f64                         select_click_time;
+	struct gpu_texture         *select_mask_image;
 	bool                        write_icon_on_export;
 	struct gpu_texture         *text_tool_image;
 	char                       *text_tool_text;
@@ -417,6 +428,13 @@ typedef struct context {
 	bool                        brush_stencil_scaling;
 	f32                         brush_stencil_angle;
 	bool                        brush_stencil_rotating;
+	struct asset               *view_image;
+	f32                         view_image_x;
+	f32                         view_image_y;
+	f32                         view_image_scale;
+	f32                         view_image_angle;
+	f32                         view_image_opacity;
+	i32                         view_image_action;
 	f32                         brush_nodes_scale;
 	f32                         brush_nodes_angle;
 	f32                         brush_nodes_hardness;
@@ -575,6 +593,11 @@ typedef struct history_step {
 	vec4_t                       object_loc;
 	quat_t                       object_rot;
 	vec4_t                       object_scale;
+	struct slot_layer_t_array   *merge_layers; // Range of the layer array on the other side of a merge
+	i32_array_t                 *merge_parents;
+	i32                          merge_start;
+	i32                          merge_length;
+	bool                         with_prev; // Undone and redone together with the previous step
 } history_step_t;
 
 typedef struct logic_node {
@@ -623,6 +646,7 @@ typedef struct {
 	struct slot_font_t_array     *fonts;
 	struct slot_sound_t_array    *sounds;
 	struct node_group_t_array    *material_groups;
+	struct node_group_t_array    *mesh_groups;
 	char                         *filepath;
 	i32                           next_asset_id;
 	struct mesh_object_t_array   *paint_objects;
@@ -675,6 +699,7 @@ typedef struct project {
 	struct ui_node_canvas_t_array               *mesh_nodes;
 	struct i32_array                            *mesh_nodes_objects; // Object index for each mesh_nodes canvas
 	struct f32_array_t_array                    *mesh_paths;         // Path and curve tool points
+	struct ui_node_canvas_t_array               *mesh_groups;
 	project_runtime_t                           *_;
 } project_t;
 

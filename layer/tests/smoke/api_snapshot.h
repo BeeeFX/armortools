@@ -415,6 +415,7 @@ typedef struct config_t {
     int window_h;
     float window_scale;
     float rp_supersample;
+    float rp_ssao;
     string_array_t *recent_projects;
     string_array_t *plugins;
     char * keymap;
@@ -498,6 +499,12 @@ typedef struct project_t {
 #define TOOLS_PAINT 0
 #define TOOLS_SCULPT 1
 #define TOOLS_OBJECT 2
+#define PLATFORM_WINDOWS 0
+#define PLATFORM_LINUX 1
+#define PLATFORM_MACOS 2
+#define PLATFORM_IOS 3
+#define PLATFORM_ANDROID 4
+#define PLATFORM_WASM 5
 #define SCULPT_TYPE_DRAW 0
 #define SCULPT_TYPE_GRAB 1
 #define SCULPT_TYPE_INFLATE 2
@@ -1129,6 +1136,8 @@ void project_filepath_set(char *s);
 camera_object_t *script_get_camera(void);
 context_t *script_get_context(void);
 config_t *script_get_config(void);
+int script_get_platform(void);
+void render_path_base_apply_config(void);
 project_t *script_get_project(void);
 world_data_t *script_get_world(void);
 object_t *script_get_object(char *s);
@@ -1242,6 +1251,17 @@ void script_mesh_disconnect(mesh_object_t *o, ui_node_t *to, int to_socket);
 void script_mesh_remove_node(mesh_object_t *o, ui_node_t *node);
 void script_mesh_add_input(mesh_object_t *o, ui_node_t *node, char *type, char *name);
 void script_mesh_update(mesh_object_t *o);
+int script_mesh_group_create(char *name);
+int script_mesh_group_remove(char *name);
+ui_node_t *script_mesh_group_create_node_at(char *group, char *type, float x, float y);
+ui_node_t *script_mesh_group_get_node(char *group, char *type);
+void script_mesh_group_connect(char *group, ui_node_t *from, int from_socket, ui_node_t *to, int to_socket);
+void script_mesh_group_disconnect(char *group, ui_node_t *to, int to_socket);
+void script_mesh_group_remove_node(char *group, ui_node_t *node);
+void script_mesh_group_add_input(char *group, ui_node_t *node, char *type, char *name);
+ui_node_t *script_mesh_create_group_node_at(mesh_object_t *o, char *group, float x, float y);
+ui_node_t *script_mesh_group_create_group_node_at(char *parent, char *group, float x, float y);
+void script_mesh_group_update(char *group);
 mesh_geo_t *mesh_geo_input(void);
 void mesh_geo_output(mesh_geo_t *g);
 mesh_geo_t *mesh_geo_create(int vertex_count, int index_count);
@@ -1587,6 +1607,8 @@ int armpack_map_get_i32(any_map_t *map, char *key);
 // MESH_MATH | in: 0 Value, 1 Value | out: 0 Value
 //     button 0 Operation ENUM: 0 Add, 1 Subtract, 2 Multiply, 3 Divide, 4 Power, 5 Minimum, 6 Maximum, 7 Modulo, 8 Sine, 9 Cosine, 10 Absolute, 11 Round, 12 Floor
 // MESH_VECTOR | in: 0 X, 1 Y, 2 Z | out: 0 Vector
+// GROUP
+//     button 0 nodes_mesh_new_group_button CUSTOM
 // MESH_OUTPUT | in: 0 Mesh
 //
 // Mesh nodes build the mesh of an object from its original mesh, each object has its own canvas with a
@@ -1629,4 +1651,18 @@ int armpack_map_get_i32(any_map_t *map, char *key);
 //     script_material_set_text(sc, 0, "void main() {\nmesh_geo_t *g = mesh_geo_subdivide(mesh_geo_input(), 2);\nfor (int i = 0; i < g->vertex_count; i++) {\ng->pos[i * 3 + 2] += sin(g->pos[i * 3] * 8.0) * 0.05;\n}\ng = mesh_geo_boolean(mesh_geo_normals(g, true), mesh_geo_shape(1, 0.8, 0.8, 0.8, 32), MESH_BOOLEAN_DIFFERENCE);\nmesh_geo_output(g);\n}");
 //     script_mesh_connect(o, script_mesh_get_node(o, "MESH_INPUT"), 0, sc, 0);
 //     script_mesh_connect(o, sc, 0, script_mesh_get_node(o, "MESH_OUTPUT"), 0);
+//     script_mesh_update(o);
+//
+// Groups: a group is a canvas shared by the project, placed on object canvases (and in other groups) as GROUP nodes.
+//     script_mesh_group_create("Detail");
+//     ui_node_t *gin = script_mesh_group_get_node("Detail", "GROUP_INPUT");
+//     script_mesh_group_add_input("Detail", gin, "VALUE", "Levels");
+//     ui_node_t *sub = script_mesh_group_create_node_at("Detail", "MESH_SUBDIVIDE", 250.0, 200.0);
+//     script_mesh_group_connect("Detail", gin, 0, sub, 0);
+//     script_mesh_group_connect("Detail", gin, 1, sub, 1);
+//     script_mesh_group_connect("Detail", sub, 0, script_mesh_group_get_node("Detail", "GROUP_OUTPUT"), 0);
+//     ui_node_t *gn = script_mesh_create_group_node_at(o, "Detail", 250.0, 200.0);
+//     script_material_set_float(gn, 1, 1, 2.0); // Levels of this object
+//     script_mesh_connect(o, script_mesh_get_node(o, "MESH_INPUT"), 0, gn, 0);
+//     script_mesh_connect(o, gn, 0, script_mesh_get_node(o, "MESH_OUTPUT"), 0);
 //     script_mesh_update(o);

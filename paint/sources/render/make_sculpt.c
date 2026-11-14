@@ -11,6 +11,7 @@ static i32            sculpt_texel_count          = 0;
 static i32           *sculpt_remap                = NULL; // Vertex -> texel
 static i32           *sculpt_rep                  = NULL; // Texel -> first vertex
 static i32           *sculpt_object_texel_offsets = NULL; // Per object, plus total
+static mesh_data_t  **sculpt_object_datas         = NULL; // Per object, the meshes the storage was built for
 static i32            sculpt_object_count         = 0;
 static gpu_texture_t *sculpt_remap_texture        = NULL;
 static gpu_texture_t *sculpt_adj_texture0         = NULL;
@@ -22,11 +23,11 @@ i32 sculpt_object_vertex_offset(mesh_object_t *o) {
 	for (i32 i = 0; i < g_project->_->paint_objects->length; ++i) {
 		mesh_object_t *p = g_project->_->paint_objects->buffer[i];
 		if (p == o) {
-			break;
+			return offset;
 		}
 		offset += p->data->vertex_arrays->buffer[0]->values->length / 4;
 	}
-	return offset;
+	return -1;
 }
 
 i32 sculpt_object_texel_offset(i32 object_index) {
@@ -144,11 +145,16 @@ static void sculpt_build_weld() {
 	free(sculpt_remap);
 	free(sculpt_rep);
 	free(sculpt_object_texel_offsets);
+	free(sculpt_object_datas);
 	sculpt_vertex_count         = vcount;
 	sculpt_object_count         = objects->length;
 	sculpt_remap                = malloc(sizeof(i32) * (vcount > 0 ? vcount : 1));
 	sculpt_rep                  = malloc(sizeof(i32) * (vcount > 0 ? vcount : 1));
 	sculpt_object_texel_offsets = malloc(sizeof(i32) * (objects->length + 1));
+	sculpt_object_datas         = malloc(sizeof(mesh_data_t *) * (objects->length + 1));
+	for (i32 o = 0; o < objects->length; ++o) {
+		sculpt_object_datas[o] = objects->buffer[o]->data;
+	}
 
 	// Group the vertices of each object by position, the lowest vertex index represents the group
 	i32 *order  = malloc(sizeof(i32) * (vcount > 0 ? vcount : 1));
@@ -293,12 +299,29 @@ static i32 sculpt_vertex_object(i32 *vertex) {
 	return 0;
 }
 
-void sculpt_import_mesh_pack_to_texture(gpu_texture_t *target) {
+static bool sculpt_storage_matches_objects() {
+	mesh_object_t_array_t *objects = g_project->_->paint_objects;
+	if (sculpt_object_datas == NULL || objects->length != sculpt_object_count) {
+		return false;
+	}
+	for (i32 o = 0; o < objects->length; ++o) {
+		if (objects->buffer[o]->data != sculpt_object_datas[o]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static buffer_t *sculpt_pack_rest() {
 	// Pack positions and normals into texture
 	u32       capacity = config_get_texture_res_x() * config_get_texture_res_y();
 	buffer_t *b        = buffer_create(capacity * 4 * 4);
-	f32      *nor      = calloc(sculpt_texel_count * 3 + 1, sizeof(f32));
-	i32       v        = 0;
+	if (!sculpt_storage_matches_objects()) {
+		memset(b->buffer, 0, b->length);
+		return b;
+	}
+	f32 *nor = calloc(sculpt_texel_count * 3 + 1, sizeof(f32));
+	i32  v   = 0;
 	for (i32 o = 0; o < g_project->_->paint_objects->length; ++o) {
 		mesh_data_t *mesh = g_project->_->paint_objects->buffer[o]->data;
 		i16_array_t *pos  = mesh->vertex_arrays->buffer[0]->values;
@@ -333,7 +356,11 @@ void sculpt_import_mesh_pack_to_texture(gpu_texture_t *target) {
 		buffer_set_f32(b, 4 * t * 4 + 3 * 4, (oct_x + 1.0f) * 0.5f + math_floor((oct_y + 1.0f) * 0.5f * 255.0f + 0.5f));
 	}
 	free(nor);
+	return b;
+}
 
+void sculpt_import_mesh_pack_to_texture(gpu_texture_t *target) {
+	buffer_t      *b       = sculpt_pack_rest();
 	gpu_texture_t *imgmesh = gpu_create_texture_from_bytes(b, config_get_texture_res_x(), config_get_texture_res_y(), GPU_TEXTURE_FORMAT_RGBA128);
 	array_free(b);
 	free(b);
@@ -867,13 +894,11 @@ node_shader_context_t *sculpt_make_sculpt_run(material_t *data) {
 
 	if (g_context->select_active && !g_context->select_2d && has_wposition) {
 		node_shader_add_constant(kong, "float4x4 VP", "_view_proj_matrix");
-		node_shader_add_constant(kong, "float4 select_mask", "_select_mask");
 		node_shader_write_frag(kong, "float4 select_sp4 = constants.VP * float4(wposition.xyz, 1.0);");
 		node_shader_write_frag(kong, "float2 select_sp = select_sp4.xy / select_sp4.w;");
 		node_shader_write_frag(kong, "select_sp.x = select_sp.x * 0.5 + 0.5;");
 		node_shader_write_frag(kong, "select_sp.y = 1.0 - (select_sp.y * 0.5 + 0.5);");
-		node_shader_write_frag(kong, "if (select_sp.x < constants.select_mask.x || select_sp.x > constants.select_mask.z || select_sp.y < "
-		                             "constants.select_mask.y || select_sp.y > constants.select_mask.w) { discard; }");
+		util_select_shader_mask(kong, "select_sp");
 	}
 
 	if (g_context->brush_stencil_image != NULL && has_wposition) {
@@ -1260,7 +1285,9 @@ void sculpt_make_mesh_run(node_shader_t *kong, slot_layer_t_array_t *sculpt_laye
 	}
 
 	// Position
-	sculpt_write_texel_uv(kong, false, "sculpt_uv", "uint(vertex_id()) + uint(constants.sculpt_vertex_offset)", string_tmp("texpaint_sculpt_size%d", idx0));
+	node_shader_write_vert(kong, "int sculpt_offset = constants.sculpt_vertex_offset;");
+	node_shader_write_vert(kong, "if (sculpt_offset < 0) { sculpt_offset = 0; }");
+	sculpt_write_texel_uv(kong, false, "sculpt_uv", "uint(vertex_id()) + uint(sculpt_offset)", string_tmp("texpaint_sculpt_size%d", idx0));
 	node_shader_write_vert(kong, string_tmp("float4 texpaint_sculpt_sample = texpaint_sculpt%d[sculpt_uv];", idx0));
 	node_shader_write_vert(kong, "float3 sculpt_pos = texpaint_sculpt_sample.xyz;");
 	if (sculpt_mask_value(kong, sculpt_layers->buffer[0], "sculpt_pmask0", false, NULL)) {
@@ -1281,6 +1308,7 @@ void sculpt_make_mesh_run(node_shader_t *kong, slot_layer_t_array_t *sculpt_laye
 			node_shader_write_vert(kong, string_tmp("sculpt_pos = sculpt_pos + texpaint_sculpt_sample_%d.xyz - texpaint_sculpt_base_sample_%d.xyz;", idx, idx));
 		}
 	}
+	node_shader_write_vert(kong, "if (constants.sculpt_vertex_offset < 0) { sculpt_pos = input.pos.xyz; }");
 	node_shader_write_vert(kong, "output.pos = constants.WVP * float4(sculpt_pos, 1.0);");
 	node_shader_write_vert(kong, "output.wposition = (constants.W * float4(sculpt_pos, 1.0)).xyz;");
 
@@ -1374,18 +1402,33 @@ void sculpt_init_sculpt_texture(slot_layer_t *l) {
 	}
 
 	if (any_map_get(render_path_render_targets, "texpaint_sculpt_base") == NULL) {
+		sculpt_pack_base();
+	}
+	else if (sculpt_layer_count == 1) {
+		render_path_set_target("texpaint_sculpt_base", NULL, NULL, GPU_CLEAR_NONE, 0, 0.0);
+		render_path_bind_target(string_tmp("texpaint_sculpt%s", i32_to_string(id)), "tex");
+		render_path_draw_shader("Scene/copy_pass/copyRGBA128_pass");
+	}
+}
+
+void sculpt_pack_base() {
+	render_target_t *rt = any_map_get(render_path_render_targets, "texpaint_sculpt_base");
+	if (rt == NULL) {
 		render_target_t *t = render_target_create();
 		t->name            = "texpaint_sculpt_base";
 		t->width           = config_get_texture_res_x();
 		t->height          = config_get_texture_res_y();
 		t->format          = "RGBA128";
-		render_path_create_render_target(t);
+		rt                 = render_path_create_render_target(t);
 	}
-
-	if (sculpt_layer_count == 1) {
-		render_path_set_target("texpaint_sculpt_base", NULL, NULL, GPU_CLEAR_NONE, 0, 0.0);
-		render_path_bind_target(string_tmp("texpaint_sculpt%s", i32_to_string(id)), "tex");
-		render_path_draw_shader("Scene/copy_pass/copyRGBA128_pass");
+	gpu_texture_t *current = _draw_current;
+	bool           in_use  = gpu_in_use;
+	if (in_use) {
+		draw_end();
+	}
+	sculpt_import_mesh_pack_to_texture(rt->_image);
+	if (in_use) {
+		draw_begin(current, false, 0);
 	}
 }
 
@@ -1458,6 +1501,7 @@ void sculpt_init_meshes() {
 
 void sculpt_init() {
 	sculpt_init_meshes();
+	sculpt_pack_base();
 
 	if (g_context->merged_object != NULL) {
 		util_mesh_merge(NULL);
@@ -1788,6 +1832,93 @@ static void sculpt_upload_pixels(gpu_texture_t *target, buffer_t *b) {
 	gpu_delete_texture(img);
 }
 
+void sculpt_reset_objects() {
+	free(sculpt_object_datas);
+	sculpt_object_datas = NULL;
+}
+
+static bool sculpt_project_has_layers() {
+	for (i32 i = 0; i < g_project->_->layers->length; ++i) {
+		if (g_project->_->layers->buffer[i]->texpaint_sculpt != NULL) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void sculpt_move_texels(gpu_texture_t *target, buffer_t *rest, mesh_data_t **old_datas, i32 *old_offsets, i32 old_count) {
+	if (target == NULL) {
+		return;
+	}
+	buffer_t *old = gpu_get_texture_pixels(target);
+	i32       n   = target->width * target->height;
+	buffer_t *b   = buffer_create(n * 16);
+	memcpy(b->buffer, rest->buffer, math_min(rest->length, b->length));
+	for (i32 o = 0; o < sculpt_object_count; ++o) {
+		i32 to    = sculpt_object_texel_offsets[o];
+		i32 count = sculpt_object_texel_offsets[o + 1] - to;
+		for (i32 j = 0; j < old_count; ++j) {
+			i32 from = old_offsets[j];
+			if (old_datas[j] == sculpt_object_datas[o] && old_offsets[j + 1] - from == count && from + count <= n && to + count <= n) {
+				memcpy(b->buffer + to * 16, old->buffer + from * 16, count * 16);
+				break;
+			}
+		}
+	}
+	sculpt_upload_pixels(target, b);
+	array_free(b);
+	free(b);
+	free(target->buffer->buffer);
+	free(target->buffer);
+	target->buffer = NULL;
+}
+
+void sculpt_sync_objects() {
+	if (sculpt_object_datas == NULL || !sculpt_project_has_layers()) {
+		return;
+	}
+	if (sculpt_storage_matches_objects()) {
+		return;
+	}
+
+	i32           old_count     = sculpt_object_count;
+	mesh_data_t **old_datas     = sculpt_object_datas;
+	i32          *old_offsets   = sculpt_object_texel_offsets;
+	sculpt_object_datas         = NULL;
+	sculpt_object_texel_offsets = NULL;
+	sculpt_build_weld();
+	sculpt_ensure_texture_res();
+
+	gpu_texture_t *current = _draw_current;
+	bool           in_use  = gpu_in_use;
+	if (in_use) {
+		draw_end();
+	}
+	buffer_t *rest = sculpt_pack_rest();
+	for (i32 i = 0; i < g_project->_->layers->length; ++i) {
+		sculpt_move_texels(g_project->_->layers->buffer[i]->texpaint_sculpt, rest, old_datas, old_offsets, old_count);
+	}
+	for (i32 i = 0; history_undo_layers != NULL && i < history_undo_layers->length; ++i) {
+		sculpt_move_texels(history_undo_layers->buffer[i]->texpaint_sculpt, rest, old_datas, old_offsets, old_count);
+	}
+	slot_layer_t_array_t *saved = history_merge_saved_layers();
+	for (i32 i = 0; i < saved->length; ++i) {
+		sculpt_move_texels(saved->buffer[i]->texpaint_sculpt, rest, old_datas, old_offsets, old_count);
+	}
+	render_target_t *base = any_map_get(render_path_render_targets, "texpaint_sculpt_base");
+	if (base != NULL) {
+		sculpt_move_texels(base->_image, rest, old_datas, old_offsets, old_count);
+	}
+	array_free(rest);
+	free(rest);
+	free(old_datas);
+	free(old_offsets);
+	if (in_use) {
+		draw_begin(current, false, 0);
+	}
+	make_material_parse_mesh_material();
+}
+
 // Shift an absolute sculpt state by the applied delta, then bring it to the new mesh scale
 static void sculpt_shift_texture(gpu_texture_t *target, f32 *delta, i32 len, f32 scale) {
 	if (target == NULL) {
@@ -1840,6 +1971,12 @@ void slot_layer_apply_sculpt(slot_layer_t *raw) {
 	}
 	for (i32 i = 0; history_undo_layers != NULL && i < history_undo_layers->length; ++i) {
 		sculpt_shift_texture(history_undo_layers->buffer[i]->texpaint_sculpt, delta, nt, scale);
+	}
+	slot_layer_t_array_t *saved = history_merge_saved_layers();
+	for (i32 i = 0; i < saved->length; ++i) {
+		if (saved->buffer[i]->texpaint_sculpt != NULL) {
+			sculpt_shift_texture(saved->buffer[i]->texpaint_sculpt, delta, nt, scale);
+		}
 	}
 	sculpt_shift_texture(rest_rt->_image, delta, nt, scale);
 	free(delta);

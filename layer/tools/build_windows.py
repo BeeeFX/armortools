@@ -9,8 +9,8 @@ What it does, in order (nothing is ever written inside this repository; every st
 
 1. notes the repository's state (`git status`), to check at the end that the build changed nothing in it;
 2. copies `base`, `paint` (without `paint/build`), `license.md`, `readme.md` and `.clang-format` into `<into>/src`;
-3. applies the core patches `layer/patches/series` lists to the copy (`git apply`; one today, restoring the hook
-   below, which upstream removed on 22 October 2026), then copies `layer/native/` into
+3. applies the core patches `layer/patches/series` lists to the copy (`git apply`; none since 13 November 2026, when
+   upstream restored the hook below), then copies `layer/native/` into
    `<into>/src/paint/plugins/external/`: with that hook, upstream's project compiles that folder in when it exists
    (`paint/plugins/project.c`, `WITH_EXTERNAL`) and calls its `external_init()` from `plugins_init()`; the folder
    exists only in that copy, never in the repository. `sng_build.h` there is rewritten with the commits being built;

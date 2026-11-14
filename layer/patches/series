@@ -1,3 +1,2 @@
 # Core patches (changes to upstream's own files), applied in this order on top of the pinned commit, in the build's
 # copy only (layer/tools/build_windows.py). README.md in this folder has the budget and the format.
-0001-restore-external-hook.patch

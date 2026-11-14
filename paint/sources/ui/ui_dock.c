@@ -345,7 +345,7 @@ void ui_dock_reset() {
 	dock_default_leaf(sidebar1, TAB_PLUGINS);
 
 	f32 scale     = g_config->window_scale;
-	i32 sidebar_w = math_floor(ui_sidebar_default_w * scale);
+	i32 sidebar_w = math_floor(ui_base_sidebar_default_w(g_config->large_asset_previews) * scale);
 	i32 status_h  = math_floor(ui_statusbar_default_h * scale);
 	// Views take the space next to the sidebar and the toolbar
 	i32 views_w = iron_window_width() - sidebar_w - math_floor(ui_toolbar_default_w * scale);
@@ -660,7 +660,7 @@ void ui_dock_layout() {
 
 i32 ui_dock_view3d_w() {
 	if (ui_dock_root == NULL) { // Not docked yet
-		return iron_window_width() - ui_sidebar_default_w - ui_toolbar_default_w;
+		return iron_window_width() - ui_base_sidebar_default_w(g_config->large_asset_previews) - ui_toolbar_default_w;
 	}
 	return dock_view3d_w;
 }
@@ -880,13 +880,17 @@ bool ui_dock_status_minimized() {
 	return l != NULL && l->visible && l->h <= ui_statusbar_default_h * g_config->window_scale;
 }
 
+i32 ui_dock_status_expanded_h(bool large) {
+	return math_floor((large ? 280 : 240) * g_config->window_scale);
+}
+
 void ui_base_toggle_browser() {
 	dock_node_t *s = dock_find_role(ui_dock_root, DOCK_ROLE_STATUS);
 	if (s == NULL) {
 		return;
 	}
 	bool minimized = s->size <= ui_statusbar_default_h * g_config->window_scale;
-	s->size        = math_floor((minimized ? 240 : ui_statusbar_default_h) * g_config->window_scale);
+	s->size        = minimized ? ui_dock_status_expanded_h(g_config->large_asset_previews) : math_floor(ui_statusbar_default_h * g_config->window_scale);
 	base_resize();
 	ui_dock_save();
 }
@@ -1021,6 +1025,17 @@ static void ui_dock_render_view3d_tabs(dock_node_t *l) {
 	}
 }
 
+i32 ui_dock_sidebar_button_inset() {
+	dock_node_t *s = dock_find_role(ui_dock_root, DOCK_ROLE_SIDEBAR);
+	if (!g_config->touch_ui || s == NULL || s->collapsed || !s->b->visible) {
+		return 0;
+	}
+	i32  button_y = s->b->y + s->b->h - math_floor(UI_ELEMENT_H() + UI_ELEMENT_OFFSET());
+	f32  bottom   = g_ui->_window_y + g_ui->_window_h;
+	bool overlap  = g_ui->_window_x < s->b->x + s->b->w && g_ui->_window_x + g_ui->_window_w > s->b->x && bottom > button_y;
+	return overlap ? math_floor(bottom - button_y) : 0;
+}
+
 static void ui_dock_render_sidebar_buttons() {
 	dock_node_t *s = dock_find_role(ui_dock_root, DOCK_ROLE_SIDEBAR);
 	if (s == NULL) {
@@ -1064,7 +1079,8 @@ static void ui_dock_render_sidebar_buttons() {
 			g_theme->BUTTON_H   = g_theme->ELEMENT_H;
 			g_theme->BUTTON_COL = g_theme->WINDOW_BG_COL;
 			if (ui_button(mini ? "<" : ">", UI_ALIGN_CENTER, "")) {
-				s->size = math_floor((mini ? ui_sidebar_default_w_full : ui_sidebar_default_w_mini) * UI_SCALE());
+				bool large = g_config->large_asset_previews;
+				s->size    = math_floor((mini ? ui_base_sidebar_full_w(large) : ui_base_sidebar_mini_w(large)) * UI_SCALE());
 				base_resize();
 				ui_dock_save();
 			}

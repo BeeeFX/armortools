@@ -1,7 +1,8 @@
 
 #include "../global.h"
 
-static ui_node_canvas_t *ui_node_params_canvas   = NULL;  // Canvas before the edit, for undo
+static ui_node_canvas_t *ui_node_params_canvas = NULL;    // Canvas before the edit, for undo
+static ui_node_canvas_t *ui_node_params_canvases[3];      // Canvas at the last press per canvas type
 static i32               ui_node_params_type     = 0;     // Canvas type of the pending edit
 static mesh_object_t    *ui_node_params_object   = NULL;  // Object of the pending mesh edit
 static bool              ui_node_params_pending  = false; // Edited, recompile once the input is released
@@ -25,9 +26,9 @@ static ui_node_canvas_t *ui_node_params_get_canvas(i32 canvas_type) {
 static ui_node_t *ui_node_params_source(i32 canvas_type) {
 	char  *material_types[] = {"GROUP", "SHADER_GPU", "OUTPUT_MATERIAL_PBR"};
 	char  *brush_types[]    = {"brush_output_node"};
-	char  *mesh_types[]     = {"MESH_SCRIPT", "MESH_OUTPUT"};
+	char  *mesh_types[]     = {"GROUP", "MESH_SCRIPT", "MESH_OUTPUT"};
 	char **types            = canvas_type == CANVAS_TYPE_BRUSH ? brush_types : canvas_type == CANVAS_TYPE_MESH ? mesh_types : material_types;
-	i32    count            = canvas_type == CANVAS_TYPE_BRUSH ? 1 : canvas_type == CANVAS_TYPE_MESH ? 2 : 3;
+	i32    count            = canvas_type == CANVAS_TYPE_BRUSH ? 1 : 3;
 
 	ui_node_canvas_t *canvas = ui_node_params_get_canvas(canvas_type);
 	if (canvas == NULL) {
@@ -56,9 +57,7 @@ static ui_node_link_t *ui_node_params_link(ui_node_canvas_t *canvas, ui_node_t *
 
 static void ui_node_params_begin(i32 canvas_type) {
 	if (g_ui->input_started || g_ui->is_key_pressed) {
-		ui_node_params_canvas = util_clone_canvas(ui_node_params_get_canvas(canvas_type));
-		ui_node_params_type   = canvas_type;
-		ui_node_params_object = g_context->paint_object;
+		ui_node_params_canvases[canvas_type] = util_clone_canvas(ui_node_params_get_canvas(canvas_type));
 	}
 	g_ui->changed = false;
 }
@@ -130,10 +129,13 @@ static void ui_node_params_update(void *_) {
 	ui_dock_redraw(-1);
 }
 
-static void ui_node_params_end() {
+static void ui_node_params_end(i32 canvas_type) {
 	if (!g_ui->changed) {
 		return;
 	}
+	ui_node_params_type    = canvas_type;
+	ui_node_params_canvas  = ui_node_params_canvases[canvas_type];
+	ui_node_params_object  = g_context->paint_object;
 	ui_node_params_pending = true;
 	ui_node_params_live    = true;
 	ui_nodes_hwnd->redraws = 2;
@@ -159,7 +161,7 @@ static void ui_node_params_color_menu() {
 		val[2]            = color_get_bb(color) / 255.0;
 		ui_menu_keep_open = true;
 	}
-	ui_node_params_end();
+	ui_node_params_end(ui_node_params_type);
 }
 
 // Space right of the entries for the input socket buttons
@@ -210,8 +212,7 @@ static void ui_node_params_set_texture(i32 index) {
 	if (index == -1 && link == NULL) {
 		return;
 	}
-	ui_node_params_canvas = util_clone_canvas(canvas);
-	ui_node_params_object = g_context->paint_object;
+	ui_node_params_canvases[ui_node_params_type] = util_clone_canvas(canvas);
 
 	if (index == -1) {
 		array_remove(canvas->links, link);
@@ -232,7 +233,7 @@ static void ui_node_params_set_texture(i32 index) {
 		from->buttons->buffer[0]->default_value->buffer[0] = index;
 	}
 	g_ui->changed = true;
-	ui_node_params_end();
+	ui_node_params_end(ui_node_params_type);
 }
 
 // Button with a down arrow drawn in the space right of the entry, keeps the layout position
@@ -420,7 +421,8 @@ void ui_node_params_draw(i32 canvas_type, bool *show) {
 
 	// Outlined section with the toggle button at the bottom of the tab, the parameters expand it upwards
 	// Toggle button sticks to the bottom of the tab, in line with the collapsed status bar
-	f32 bottom = g_ui->_window_h - UI_ELEMENT_H() - UI_ELEMENT_OFFSET() + g_ui->current_window->scroll_offset;
+	i32 inset  = ui_dock_sidebar_button_inset();
+	f32 bottom = g_ui->_window_h - UI_ELEMENT_H() - UI_ELEMENT_OFFSET() - inset + g_ui->current_window->scroll_offset;
 	f32 _x     = g_ui->_x;
 	f32 _w     = g_ui->_w;
 	f32 pad    = UI_ELEMENT_OFFSET() * 2;
@@ -450,7 +452,7 @@ void ui_node_params_draw(i32 canvas_type, bool *show) {
 		ui_node_params_draw_buttons(node);
 		ui_node_params_draw_inputs(canvas_type, node);
 		g_ui->_w += ui_node_params_socket_w();
-		ui_node_params_end();
+		ui_node_params_end(canvas_type);
 		if (g_ui->_y - params_y != params_h) {
 			// Lay out again, one more frame to drop the scrollbar width a misplaced frame may have reserved
 			ui_node_params_heights[canvas_type] = g_ui->_y - params_y;
@@ -496,4 +498,5 @@ void ui_node_params_draw(i32 canvas_type, bool *show) {
 	g_ui->_w = _w;
 	f32 h    = g_ui->_y - section_y;
 	ui_rect_round(1, -h / UI_SCALE(), g_ui->_w / (float)UI_SCALE() - 2, h / UI_SCALE(), g_theme->BUTTON_COL, 2);
+	g_ui->_y += inset;
 }

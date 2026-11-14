@@ -26,6 +26,18 @@ void tab_textures_draw_export_on_next_frame2(gpu_texture_t *target) {
 	if (string_equals(f, "")) {
 		f = string_copy(tr("untitled"));
 	}
+	if (target->format == GPU_TEXTURE_FORMAT_RGBA64) {
+		if (!ends_with(f, ".exr")) {
+			f = string("%s.exr", f);
+		}
+		buffer_t *pixels = gpu_get_texture_pixels(target);
+		buffer_t *b      = export_exr_run(target->width, target->height, pixels, 16, 1, 0);
+		iron_file_save_bytes(string("%s%s%s", path, PATH_SEP, f), b, b->length);
+		array_free(b);
+		free(b);
+		gpu_delete_texture(target);
+		return;
+	}
 	if (!ends_with(f, ".jpg") && !ends_with(f, ".png")) {
 		f = string("%s.png", f);
 	}
@@ -41,9 +53,10 @@ void tab_textures_draw_export_on_next_frame2(gpu_texture_t *target) {
 
 void tab_textures_draw_export_on_next_frame(void *_) {
 	gpu_texture_t *img    = _tab_textures_draw_img;
-	gpu_texture_t *target = gpu_create_render_target(img->width, img->height, GPU_TEXTURE_FORMAT_RGBA32);
+	bool           hdr    = img->format == GPU_TEXTURE_FORMAT_RGBA64 || img->format == GPU_TEXTURE_FORMAT_RGBA128;
+	gpu_texture_t *target = gpu_create_render_target(img->width, img->height, hdr ? GPU_TEXTURE_FORMAT_RGBA64 : GPU_TEXTURE_FORMAT_RGBA32);
 	draw_begin(target, false, 0);
-	draw_set_pipeline(pipes_copy);
+	draw_set_pipeline(hdr ? pipes_copy64 : pipes_copy);
 	draw_scaled_image(img, 0, 0, target->width, target->height);
 	draw_set_pipeline(NULL);
 	draw_end();
@@ -130,7 +143,9 @@ void tab_textures_delete_texture(asset_t *asset) {
 
 void tab_textures_draw_context_menu() {
 	if (ui_menu_button(tr("Export"), "", ICON_EXPORT)) {
-		ui_files_show("png,jpg", true, false, &tab_textures_draw_export);
+		gpu_texture_format_t format = _tab_textures_draw_img->format;
+		bool                 hdr    = format == GPU_TEXTURE_FORMAT_RGBA64 || format == GPU_TEXTURE_FORMAT_RGBA128;
+		ui_files_show(hdr ? "exr" : "png,jpg", true, false, &tab_textures_draw_export);
 	}
 	if (ui_menu_button(tr("Reimport"), "", ICON_SYNC)) {
 		project_reimport_texture(_tab_textures_draw_asset);
@@ -161,6 +176,14 @@ void tab_textures_draw_context_menu() {
 	}
 	if (!_tab_textures_draw_is_packed && ui_menu_button(tr("Open in Browser"), "", ICON_NONE)) {
 		tab_browser_show_directory(substring(_tab_textures_draw_asset->file, 0, string_last_index_of(_tab_textures_draw_asset->file, PATH_SEP)));
+	}
+	if (g_context->view_image == _tab_textures_draw_asset) {
+		if (ui_menu_button(tr("Close in 3D View"), "", ICON_NONE)) {
+			util_stencil_view_image_close();
+		}
+	}
+	else if (ui_menu_button(tr("Open in 3D View"), "", ICON_NONE)) {
+		util_stencil_view_image_open(_tab_textures_draw_asset, 0.5, 0.5);
 	}
 }
 
@@ -352,7 +375,8 @@ void tab_textures_draw(i32 *htab) {
 
 		if (g_project->_->assets->length > 0) {
 
-			i32 slotw = math_floor(52 * UI_SCALE());
+			f32 a     = ui_base_asset_scale();
+			i32 slotw = math_floor((50 * a + 2) * UI_SCALE());
 			i32 num   = math_floor(g_ui->_window_w / (float)slotw);
 			if (num == 0) {
 				return;
@@ -369,7 +393,7 @@ void tab_textures_draw(i32 *htab) {
 			bool drag_pos_set = false;
 			f32  uix          = 0.0;
 			f32  uiy          = 0.0;
-			i32  imgw_val     = math_floor(50 * UI_SCALE());
+			i32  imgw_val     = math_floor(50 * a * UI_SCALE());
 
 			for (i32 row = 0; row < math_floor(math_ceil(filtered->length / (float)num)); ++row) {
 				i32          mult = g_config->show_asset_names ? 2 : 1;
@@ -380,13 +404,13 @@ void tab_textures_draw(i32 *htab) {
 				ui_row(ar);
 
 				g_ui->_x += 2;
-				f32 off = g_config->show_asset_names ? UI_ELEMENT_OFFSET() * 10.0 : 6;
+				f32 off = g_config->show_asset_names ? UI_ELEMENT_OFFSET() * 10.0 + (a - 1) * 50 * UI_SCALE() : 6;
 				if (row > 0) {
 					g_ui->_y += off;
 				}
 
 				for (i32 j = 0; j < num; ++j) {
-					i32 imgw = math_floor(50 * UI_SCALE());
+					i32 imgw = math_floor(50 * a * UI_SCALE());
 					i32 fi   = j + row * num;
 					if (fi >= filtered->length) {
 						ui_end_element_of_size(imgw);
@@ -436,7 +460,7 @@ void tab_textures_draw(i32 *htab) {
 						f32 _uiy = g_ui->_y;
 						g_ui->_x = uix;
 						g_ui->_y = uiy;
-						i32 w    = 50;
+						i32 w    = 50 * a;
 						ui_rect_round(1, 1, w + 2, w + 2, g_theme->HIGHLIGHT_COL, 2 * UI_SCALE());
 						g_ui->_x = _uix;
 						g_ui->_y = _uiy;
@@ -469,13 +493,12 @@ void tab_textures_draw(i32 *htab) {
 					}
 
 					if (g_config->show_asset_names) {
-						g_ui->_x = uix;
-						g_ui->_y += slotw * 0.9;
-						ui_text(g_project->_->assets->buffer[i]->name, UI_ALIGN_CENTER, 0x00000000);
+						g_ui->_y += slotw * 0.9 + (a - 1) * 5 * UI_SCALE();
+						ui_base_asset_name(g_project->_->assets->buffer[i]->name, uix, slotw);
 						if (g_ui->is_hovered) {
 							ui_tooltip(g_project->_->assets->buffer[i]->name);
 						}
-						g_ui->_y -= slotw * 0.9;
+						g_ui->_y -= slotw * 0.9 + (a - 1) * 5 * UI_SCALE();
 						if (fi == filtered->length - 1) {
 							g_ui->_y += j == num - 1 ? imgw : imgw + UI_ELEMENT_H() + UI_ELEMENT_OFFSET();
 						}

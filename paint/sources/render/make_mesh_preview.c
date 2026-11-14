@@ -22,7 +22,7 @@ node_shader_context_t *make_mesh_preview_run(material_t *data, bool viewport) {
                                                                 2),
 	                                                             .depth_attachment = "D32"});
 
-	if (viewport) {
+	if (viewport && render_path_base_gbuffer_uv()) {
 		string_array_push(props->color_attachments, "RGBA64");
 	}
 
@@ -78,7 +78,7 @@ node_shader_context_t *make_mesh_preview_run(material_t *data, bool viewport) {
 		node_shader_write_frag(kong, string_tmp("if (opacity <= float(%s)) { discard; }", f32_to_string(opac)));
 	}
 
-	kong->frag_out = viewport ? "float4[3]" : "float4[2]";
+	kong->frag_out = viewport && render_path_base_gbuffer_uv() ? "float4[3]" : "float4[2]";
 	kong->frag_n   = true;
 
 	node_shader_add_function(kong, str_pack_float_int16);
@@ -142,7 +142,7 @@ node_shader_context_t *make_mesh_preview_run(material_t *data, bool viewport) {
 		node_shader_write_frag(kong, "output[1] = float4(lerp(float3(0.0, 0.0, 0.0), basecol, opacity), occlusion);");
 	}
 
-	if (viewport) {
+	if (viewport && render_path_base_gbuffer_uv()) {
 		node_shader_write_frag(kong, "output[2] = float4(0.0, 0.0, 0.0, 0.0);");
 	}
 
@@ -162,24 +162,26 @@ shader_data_t *make_mesh_preview_viewport(slot_material_t *slot) {
 	node_shader_context_t *con = make_mesh_preview_run(mm, true);
 	shader_context_load(con->data);
 
-	tool_type_t    _tool                = g_context->tool;
-	i32            _fill_type           = g_context->fill_type;
-	slot_layer_t  *_layer               = g_context->layer;
-	bool           _select_active       = g_context->select_active;
-	bool           _colorid_picked      = g_context->colorid_picked;
-	bool           _picker_paint_mask   = g_context->picker_paint_mask;
-	gpu_texture_t *_brush_stencil_image = g_context->brush_stencil_image;
-	gpu_texture_t *_brush_mask_image    = g_context->brush_mask_image;
-	blend_type_t   _brush_blending      = g_context->brush_blending;
-	g_context->tool                     = TOOL_TYPE_FILL;
-	g_context->fill_type                = FILL_TYPE_OBJECT;
-	g_context->layer                    = ALLOC_INIT(slot_layer_t, {.fill_material = slot, .uv_type = UV_TYPE_UVMAP, .scale = 1.0, .visible = true});
-	g_context->select_active            = false;
-	g_context->colorid_picked           = false;
-	g_context->picker_paint_mask        = false;
-	g_context->brush_stencil_image      = NULL;
-	g_context->brush_mask_image         = NULL;
-	g_context->brush_blending           = BLEND_TYPE_MIX;
+	tool_type_t    _tool                 = g_context->tool;
+	i32            _fill_type            = g_context->fill_type;
+	slot_layer_t  *_layer                = g_context->layer;
+	bool           _select_active        = g_context->select_active;
+	bool           _colorid_picked       = g_context->colorid_picked;
+	bool           _picker_material_mask = g_context->picker_material_mask;
+	bool           _picker_color_mask    = g_context->picker_color_mask;
+	gpu_texture_t *_brush_stencil_image  = g_context->brush_stencil_image;
+	gpu_texture_t *_brush_mask_image     = g_context->brush_mask_image;
+	blend_type_t   _brush_blending       = g_context->brush_blending;
+	g_context->tool                      = TOOL_TYPE_FILL;
+	g_context->fill_type                 = FILL_TYPE_OBJECT;
+	g_context->layer                     = ALLOC_INIT(slot_layer_t, {.fill_material = slot, .uv_type = UV_TYPE_UVMAP, .scale = 1.0, .visible = true});
+	g_context->select_active             = false;
+	g_context->colorid_picked            = false;
+	g_context->picker_material_mask      = false;
+	g_context->picker_color_mask         = false;
+	g_context->brush_stencil_image       = NULL;
+	g_context->brush_mask_image          = NULL;
+	g_context->brush_blending            = BLEND_TYPE_MIX;
 
 	material_t            *amm  = ALLOC_INIT(material_t, {.name = "Material", .canvas = slot->canvas});
 	node_shader_context_t *acon = make_paint_run_context(amm, "atlas");
@@ -188,13 +190,14 @@ shader_data_t *make_mesh_preview_viewport(slot_material_t *slot) {
 	g_context->tool      = _tool;
 	g_context->fill_type = _fill_type;
 	free(g_context->layer);
-	g_context->layer               = _layer;
-	g_context->select_active       = _select_active;
-	g_context->colorid_picked      = _colorid_picked;
-	g_context->picker_paint_mask   = _picker_paint_mask;
-	g_context->brush_stencil_image = _brush_stencil_image;
-	g_context->brush_mask_image    = _brush_mask_image;
-	g_context->brush_blending      = _brush_blending;
+	g_context->layer                = _layer;
+	g_context->select_active        = _select_active;
+	g_context->colorid_picked       = _colorid_picked;
+	g_context->picker_material_mask = _picker_material_mask;
+	g_context->picker_color_mask    = _picker_color_mask;
+	g_context->brush_stencil_image  = _brush_stencil_image;
+	g_context->brush_mask_image     = _brush_mask_image;
+	g_context->brush_blending       = _brush_blending;
 
 	shader_data_t *md = ALLOC_INIT(shader_data_t, {0});
 	md->name          = string("_material_%s", i32_to_string(slot->id));

@@ -27,7 +27,10 @@ void viewport_reset() {
 		if (string_equals(o->type, "camera_object")) {
 			cam->base->transform->local = mat4_from_f32_array(o->transform, 0);
 			transform_decompose(cam->base->transform);
-			cam->data->fov         = g_config->camera_fov;
+			cam->data->fov = g_config->camera_fov;
+			vec4_t look    = camera_object_look(cam);
+			f32    d       = vec4_dot(vec4_mult(cam->base->transform->loc, -1.0), look);
+			transform_move(cam->base->transform, look, d - d * math_tan(0.69 / 2.0) / math_tan(cam->data->fov / 2.0));
 			g_context->camera_type = 0;
 			cam->data->ortho       = NULL;
 			camera_object_build_proj(cam, -1.0);
@@ -53,6 +56,7 @@ void viewport_set_view(f32 x, f32 y, f32 z, f32 rx, f32 ry, f32 rz) {
 	camera_object_build_proj(cam, -1.0);
 	g_context->ddirty = 2;
 	camera_reset(g_context->view_index_last);
+	render_path_raytrace_ready = false;
 }
 
 void viewport_orbit(f32 x, f32 y) {
@@ -251,11 +255,11 @@ void viewport_capture_video_end() {
 	iron_mp4_end();
 #endif
 	gpu_delete_texture(viewport_video_frame);
-	viewport_video_frame  = NULL;
+	viewport_video_frame   = NULL;
 	viewport_recording     = false;
 	viewport_video_stepped = false;
 	viewport_video_time    = -1.0;
 	g_config->rp_vignette  = viewport_video_vignette;
-	g_config->rp_grain    = viewport_video_grain;
-	g_context->ddirty     = 2;
+	g_config->rp_grain     = viewport_video_grain;
+	g_context->ddirty      = 2;
 }

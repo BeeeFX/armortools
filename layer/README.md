@@ -3,8 +3,8 @@
 This folder makes ArmorPaint feel like Substance 3D Painter, for the artists of the collective that uses Singerie,
 **changing almost none of upstream ArmorPaint's own files**. Everything here is added beside them: data files
 ArmorPaint reads (a keymap, a theme, export presets) and a small native module compiled in through an "external"
-hook. Upstream removed that hook on 22 October 2026; the layer's one core patch (15 lines, applied by the build in
-its copy) puts it back as it was. So the layer follows upstream: when ArmorPaint moves on, the layer is rebuilt on the new
+hook upstream keeps for that (it removed it on 22 October 2026 and restored it on 13 November, `32c7af5`, after the
+collective asked; the layer carried it as a core patch in between). So the layer follows upstream: when ArmorPaint moves on, the layer is rebuilt on the new
 commit, and a smoke test says at once what broke. `../FORK.md` says the same in two paragraphs; `GAPS.md` lists what
 Painter has that ArmorPaint doesn't, and what comes next.
 
@@ -21,7 +21,7 @@ Singerie's own repository (`plugins/armorpaint`). This repository holds only cha
 | `ext/export_presets/singerie*.json` | The studio's texture export presets |
 | `native/sng_bindings.c` | The native module: the `sng_*` script functions and the layer's defaults. The only file that calls ArmorPaint's internals |
 | `native/sng_build.h` | What is being built (the build tool rewrites it in its copy) |
-| `patches/` | Core patches: one, putting back the external hook upstream removed on 22 October 2026 (`patches/README.md` has the budget) |
+| `patches/` | Core patches: none since 13 November 2026 (`patches/README.md` has the budget, and the upstream pull requests prepared) |
 | `tools/build_windows.py` | Builds ArmorPaint with the layer on Windows |
 | `tools/package_windows.py` | Packs a members' build (only the files the build laid out) |
 | `tools/watch.py` | Checks, then follows, upstream's newest commit |
@@ -38,7 +38,7 @@ python layer/tools/build_windows.py --into D:/b # elsewhere
 
 It needs Visual Studio 2022 with "Desktop development with C++" and Python 3.11+; nothing is downloaded. It never
 writes inside the repository: it copies `base/` and `paint/` to `<into>/src`, applies the core patches `patches/series`
-lists to that copy, lays `layer/native/` out as `paint/plugins/external/` there (with the patched hook, the project
+lists to that copy (none today), lays `layer/native/` out as `paint/plugins/external/` there (with upstream's hook, the project
 compiles that folder in when it exists, defines `WITH_EXTERNAL` and calls its `external_init()` from
 `plugins_init()`; the folder exists only in the copy), runs upstream's `amake` (only the one whose SHA-256
 `upstream.toml` pins as `amake_sha256`: another one stops the build until a person has read what changed and passes
@@ -257,7 +257,7 @@ function the build lacks doesn't load at all, whatever branch the call is in. Su
 | `char *sng_layer_name(int id)`, `char *sng_layer_kind(int id)`, `int sng_layer_parent(int id)` | Kind: `paint`, `fill`, `decal`, `path`, `text`, `group`, `mask`, `fill_mask`, `group_mask`, `filter` |
 | `float sng_layer_opacity(int id)`, `char *sng_layer_blending(int id)`, `int sng_layer_visible(int id)` | Blending names: `mix`, `darken`, `multiply`, `burn`, `lighten`, `screen`, `dodge`, `add`, `overlay`, `soft_light`, `linear_light`, `difference`, `subtract`, `divide`, `hue`, `saturation`, `color`, `value` |
 | `int sng_layer_new_paint()`, `int sng_layer_new_fill()` | A layer above the selected one (a fill layer with the current material); its id |
-| `int sng_layer_group(int id)` | Put a top-level layer in a new group; the group's id |
+| `int sng_layer_group(int id)` | Put a layer or a group in a new group (groups nest since upstream's `43a9375`); the group's id |
 | `int sng_mask_new(int id, char *kind)` | `black`, `white` or `fill` mask on a layer or group; its id |
 | `int sng_layer_duplicate(int id)` | A copy with its masks; its id |
 | `int sng_layer_set_name(int id, char *name)`, `int sng_layer_set_opacity(int id, float opacity)`, `int sng_layer_set_blending(int id, char *mode)`, `int sng_layer_set_visible(int id, int visible)` | |
@@ -341,6 +341,16 @@ pipeline plugin (which reads `object_t`'s `name` and `children`, `context_t`'s `
 141 checks pass, as on the 4 October build; Singerie's pipeline plugin test: 82 checks pass on both builds; a
 project saved by the 4 October build (a fill layer with a mask in a group) opens in the new one with the same
 layers.
+
+The third follow (13 November 2026, by hand on the branch `sng/follow-22097df`): `49e9033` to `22097df` (13 November,
+95 upstream commits), among them `32c7af5`, upstream restoring the external hook, so the layer's core patch went.
+Upstream's build tool is the same program (its SHA-256 unchanged). One compile error: `43a9375` ("paint: merge layer
+fixes") removed `slot_layer_is_in_group`, because groups now nest; `sng_layer_group` follows upstream's own New >
+Group (a layer or a group goes in a new group, in its place) instead of refusing a layer already in a group, and the
+smoke test's refusal check now uses an unknown id. The 16 hand-declared internals still match. The API snapshot gained
+36 lines: the platform enum and `script_get_platform`, mesh node groups (`script_mesh_group_*`),
+`render_path_base_apply_config`, and `config_t`'s new `rp_ssao` (read neither by the layer nor by Singerie's plugin).
+Smoke test: 181 checks pass; Singerie's pipeline plugin test: 87 checks pass.
 
 ## Licence
 
